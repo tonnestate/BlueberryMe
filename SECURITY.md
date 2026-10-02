@@ -36,9 +36,17 @@ Untrusted for direct identity/secrets:
 
 ## Key material
 
-The HTTP reference gateway persists a local 32-byte master key by default so restart does not destroy audit correlation or encrypted job state. For production, inject approved key material (`BBM_MASTER_KEY_B64`) or integrate an organizational KMS/HSM.
+A persistent runtime refuses to start without explicit key material: `BBM_MASTER_KEY_B64`, or `BBM_MASTER_KEY_FILE` pointing to an existing file outside the state directory. A key stored next to `state.db` is accepted only with `BBM_DEV_MODE=1`, because copying the state directory would otherwise disclose both ciphertext and key. For production, integrate an organizational KMS/HSM where available.
 
 The local file provider is a usability/reference mechanism, not an HSM claim.
+
+## Gateway authentication
+
+The HTTP gateway requires an API key per request (`Authorization: Bearer`). The key file (`BBM_API_KEYS_FILE`) stores SHA-256 hashes only, each mapped to a tenant, allowed purposes and optionally one agent. Tenant and agent identity are taken from the key; contradicting body values are denied. Leases and jobs of other tenants (or other agents, for agent-bound keys) are reported as unknown. Without a key file the gateway starts only with `BBM_DEV_MODE=1`.
+
+## Policy floor
+
+The policy loader refuses `ALLOW` for `SECRET` and `IBAN`, including via `default_action`.
 
 ## State
 

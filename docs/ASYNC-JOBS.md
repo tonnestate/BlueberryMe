@@ -24,6 +24,13 @@ QUEUED -> RUNNING -> COMPLETED -> RETRIEVED
 8. `get_result` creates a new lease and tokenises the response at retrieval time.
 9. Retrieval removes the trusted raw result/envelope from normal job state.
 10. Status and errors expose catalogue codes only.
+11. A worker claims a job with an atomic conditional write and holds the claim for `run_lease_seconds` (default 60, capped at the deadline). A second worker gets `BBM_JOB_ALREADY_RUNNING` while the claim is live.
+12. If a worker crashes, its claim expires and another worker takes the job over with the same `idempotency_key`.
+13. A worker writes its outcome only if it still owns its claim. A late worker cannot overwrite a cancellation, expiry or takeover.
+14. A completed result is delivered exactly once, also under concurrent retrieval.
+15. Jobs record their owner (tenant, agent, purpose). Callers that pass an identity only see their own jobs.
+
+Choose `run_lease_seconds` above the longest expected handler runtime. A handler that outlives its claim can be executed again by another worker; only the target's idempotency handling then prevents a duplicate side effect.
 
 ## Important limitation
 
@@ -35,6 +42,6 @@ BlueberryMe can avoid executing an already-completed job twice. It cannot guaran
 - lease renewal;
 - Temporal/Camunda integration;
 - callbacks directly to an agent;
-- distributed worker leasing/HA queue semantics.
+- HA queue semantics beyond the single-store worker claim above (heartbeats, fair scheduling, dead-letter queues).
 
 Those remain provider/deployment concerns rather than BBM/1 core semantics.

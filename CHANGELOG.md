@@ -2,6 +2,16 @@
 
 ## 0.3.0 — 2026-10-02
 
+### Hardening before release
+
+- **Gateway authentication.** Per-tenant API keys (`BBM_API_KEYS_FILE`, hashed), optional agent binding, tenant/agent identity from the key instead of the request body, lease and job ownership checks. `blueberryme api-key` generates keys. Unauthenticated mode only with `BBM_DEV_MODE=1`.
+- **Master key placement.** No implicit `master.key` next to `state.db` outside dev mode; `BBM_MASTER_KEY_FILE` must exist outside the state directory. `blueberryme keygen` creates a 0600 key file. **Upgrade:** move an existing `.blueberryme/master.key` out of the state directory and set `BBM_MASTER_KEY_FILE`.
+- **Atomic job state.** State backends gain `compare_and_put`; job claim, completion, cancellation and retrieval use conditional writes. Two workers can no longer execute the same job; a crashed worker's claim expires (`run_lease_seconds`) and the job is taken over; a result is retrieved exactly once.
+- **Policy floor.** `ALLOW` is refused for `SECRET` and `IBAN`, including through `default_action`.
+- **Tests.** Runtime and proxy tests migrated to the v0.3 API; new tests for concurrency, keys, gateway auth and policy floor.
+
+Custom `StateBackend` implementations must add `compare_and_put(kind, object_id, payload, expected, expires_at=None) -> bool`.
+
 ### Architecture
 
 - Replaced agent-visible reversible ciphertext with random lease-local handles only.

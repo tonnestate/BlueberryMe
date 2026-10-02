@@ -210,10 +210,17 @@ The reference runtime can use an encrypted SQLite state file. This is deliberate
 ```text
 .blueberryme/
   state.db       # encrypted object payloads
-  master.key     # local reference key; mode 0600 where supported
+/etc/blueberryme/
+  master.key     # 32-byte key, mode 0600, outside the state directory
 ```
 
-Production deployments can inject the 32-byte master key through `BBM_MASTER_KEY_B64` or replace the local key source with an approved KMS/HSM integration. BBM/1 does not depend on a specific KMS.
+The master key must not live next to the state it protects. A persistent runtime resolves it in this order:
+
+1. `BBM_MASTER_KEY_B64` (32 bytes, base64/base64url);
+2. `BBM_MASTER_KEY_FILE`, which must already exist and lie outside the state directory (`blueberryme keygen <path>` creates one);
+3. only with `BBM_DEV_MODE=1`: `<state_dir>/master.key`, created on first use.
+
+Without one of these, the runtime refuses to start. An approved KMS/HSM integration can replace the key source; BBM/1 does not depend on a specific KMS.
 
 The agent never receives encrypted payloads from the state store; it receives only random handles.
 
@@ -265,7 +272,7 @@ It can resolve only for the target + operation for which it was created. There i
 ```bash
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -e .[dev]
+pip install -e .[dev,api]
 pytest -q
 blueberryme demo
 ```
@@ -273,17 +280,27 @@ blueberryme demo
 Current reference suite:
 
 ```text
-34 tests passing
+88 tests passing (API tests are skipped without the api extra)
 ```
 
 HTTP gateway:
 
 ```bash
 pip install -e .[api]
+
+# 1. Master key outside the state directory
+blueberryme keygen /etc/blueberryme/master.key
+export BBM_MASTER_KEY_FILE=/etc/blueberryme/master.key
+
+# 2. One API key per tenant (bind it to an agent where possible)
+blueberryme api-key --tenant-id tenant-a --purpose CLAIM_REVIEW --agent-id claims-agent
+#    -> prints the key once and a hashed entry for the key file
+export BBM_API_KEYS_FILE=/etc/blueberryme/api-keys.yaml
+
 blueberryme serve
 ```
 
-By default the HTTP gateway uses `.blueberryme/state.db` and a persistent local key. Use environment/KMS injection for production key material.
+Clients send `Authorization: Bearer <key>`. Tenant and, for agent-bound keys, agent identity come from the key, not from the request body. Leases and jobs are only visible to their own tenant (and agent). For local experiments `BBM_DEV_MODE=1` starts the gateway without keys and with an auto-created local master key; never use it with real data.
 
 ## MCP
 
