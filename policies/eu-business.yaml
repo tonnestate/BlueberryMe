@@ -1,61 +1,54 @@
 extends: base.yaml
-version: BBM/1-draft-0.2
+version: BBM/1-draft-0.3
 
 quality:
-  # Explicit, non-guessing formats. Organizations can add formats to their own profile.
   accepted_birth_date_formats:
     - "%Y-%m-%d"
     - "%d.%m.%Y"
     - "%Y%m%d"
 
 classes:
+  UNKNOWN:
+    action: TOKENIZE
+    rehydrate: {}
+
   PERSON:
     action: TOKENIZE
-    token_mode: LEASE_HANDLE
     rehydrate:
       LETTER_SERVICE: ["DELIVER"]
       SOURCE_SYSTEM: ["LOOKUP"]
 
   EMAIL:
     action: TOKENIZE
-    token_mode: LEASE_HANDLE
     rehydrate:
       MAIL_DELIVERY: ["DELIVER"]
-    quality:
-      on_invalid: SUPPRESS
 
   PHONE:
     action: TOKENIZE
-    token_mode: LEASE_HANDLE
     rehydrate:
       TELEPHONY: ["CALL"]
-    quality:
-      on_invalid: SUPPRESS
 
   ADDRESS:
     action: TOKENIZE
-    token_mode: LEASE_HANDLE
     rehydrate:
       LETTER_SERVICE: ["DELIVER"]
       SOURCE_SYSTEM: ["LOOKUP"]
 
   CASE_ID:
     action: TOKENIZE
-    token_mode: LEASE_HANDLE
     rehydrate:
       SOURCE_SYSTEM: ["LOOKUP", "UPDATE_CASE"]
 
   BIRTH_DATE:
-    action: GENERALIZE
-    rehydrate: {}
-    quality:
-      on_invalid: SUPPRESS
+    # Source remains byte/value-exact. No lossy generalisation in the core path.
+    action: TOKENIZE
+    rehydrate:
+      SOURCE_SYSTEM: ["LOOKUP"]
 
   IBAN:
-    action: DENY
-    rehydrate: {}
-    quality:
-      on_invalid: SUPPRESS
+    action: TOKENIZE
+    rehydrate:
+      PAYMENT_SERVICE: ["PAY"]
 
   SECRET:
     action: DENY
@@ -69,3 +62,14 @@ classes:
   PUBLIC:
     action: ALLOW
     rehydrate: {}
+
+flows:
+  - origin_scope: "*"
+    purposes: ["CLAIM_REVIEW"]
+    sinks:
+      SOURCE_SYSTEM: ["LOOKUP", "UPDATE_CASE"]
+      LETTER_SERVICE: ["DELIVER"]
+      MAIL_DELIVERY: ["DELIVER"]
+      TELEPHONY: ["CALL"]
+      PAYMENT_SERVICE: ["PAY"]
+      GITHUB: ["WRITE_REPO"]

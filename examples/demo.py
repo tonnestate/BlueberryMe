@@ -1,38 +1,45 @@
 from pathlib import Path
 
-from blueberryme.models import DataClass
+from blueberryme import BlueberryRuntime, DataClass, MemorySourceAdapter, SourceReference, StructuredToolGuard, TargetAdapter
 from blueberryme.policy import load_policy
-from blueberryme.runtime import BlueberryRuntime
 
-policy = load_policy(Path(__file__).parents[1] / "policies" / "eu-business.yaml")
-bbm = BlueberryRuntime(policy)
-
-lease = bbm.create_lease(
-    agent_id="unknown-google-agent",
-    purpose="CLAIM_REVIEW",
-    scope="CLAIM-4711",
-    ttl_seconds=300,
-    allowed_rehydrate_targets={"SOURCE_SYSTEM"},
+root = Path(__file__).parents[1]
+runtime = BlueberryRuntime(load_policy(root / "policies" / "eu-business.yaml"))
+runtime.register_source(
+    "claims",
+    MemorySourceAdapter(
+        {"4711": {"name": "李 明", "case": "UV-2026-004817", "diagnosis": "Fraktur rechter Unterarm"}},
+        versions={"4711": "42"},
+    ),
 )
+lease = runtime.create_lease(
+    agent_id="external-agent",
+    purpose="CLAIM_REVIEW",
+    scope="CASE:4711",
+    allowed_operations={"SOURCE_SYSTEM": ["LOOKUP"]},
+)
+view = runtime.protect_reference_record(
+    {
+        "name": SourceReference("claims", "4711", "name", "42"),
+        "case": SourceReference("claims", "4711", "case", "42"),
+        "diagnosis": SourceReference("claims", "4711", "diagnosis", "42"),
+    },
+    {"name": DataClass.PERSON, "case": DataClass.CASE_ID, "diagnosis": DataClass.HEALTH_DATA},
+    lease,
+)
+print(view)
 
-row = {
-    "person": "Max Mustermann",
-    "case_id": "UV-2026-004817",
-    "diagnosis": "Fraktur rechter Unterarm",
-    "iban": "DE02120300000000202051",
-}
-
-schema = {
-    "person": DataClass.PERSON,
-    "case_id": DataClass.CASE_ID,
-    "diagnosis": DataClass.HEALTH_DATA,
-    "iban": DataClass.IBAN,
-}
-
-model_view = bbm.protect_record(row, schema, lease)
-print(model_view)
-
-real_case = bbm.rehydrate(model_view["case_id"], lease, target="SOURCE_SYSTEM")
-print(real_case)
-
-bbm.destroy_lease(lease)
+guard = StructuredToolGuard(runtime)
+call = guard.authorize_tool_call(
+    {"case": view["case"]},
+    lease_id=lease,
+    target="SOURCE_SYSTEM",
+    operation="LOOKUP",
+    reference_fields={"case": DataClass.CASE_ID},
+)
+response = TargetAdapter(runtime, target_id="SOURCE_SYSTEM").execute(
+    call,
+    lambda args: {"case": args["case"]},
+    response_schema={"case": DataClass.CASE_ID},
+)
+print(response)

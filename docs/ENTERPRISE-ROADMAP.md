@@ -1,29 +1,38 @@
-# Enterprise hardening roadmap
+# Enterprise roadmap
 
-v0.2 deliberately stays small. It establishes the privacy semantics before introducing infrastructure scale.
+v0.3 intentionally keeps the mandatory core small.
 
-## Next hardening slices
+## Core now
 
-1. Transparent MCP stdio/HTTP proxy enforcement.
-2. Database/API gateway adapters with schema policy and read-only first deployment.
-3. KMS/HSM key providers and rotation/revocation tests.
-4. Signed/versioned policy bundles with controlled promotion.
-5. Quasi-identifier risk engine and configurable generalization strategies.
-6. HA/failover testing with explicit prohibition of direct raw-data fallback.
-7. Immutable evidence export and SIEM integration.
-8. Workload identity, operator separation and break-glass controls.
-9. Attack suite: prompt injection, token replay, cross-lease linkage, cache leakage, policy outage, key outage and bypass attempts.
-10. Performance/effectiveness eval comparing raw-context task quality with privacy-compiled context.
+- BBM/1 policy + data-flow semantics;
+- random handles;
+- encrypted pointer/capsule store;
+- signed per-call intents;
+- target-bound pull resolution;
+- mandatory response/error protection;
+- bounded async jobs;
+- encrypted persistent SQLite reference store;
+- payload-free persistent audit;
+- lazy async optional providers.
 
-## Acceptance direction
+## Provider-grade additions later
 
-```text
-unauthorized direct identifiers reaching model = 0
-secrets reaching model                         = 0
-unauthorized rehydration                       = 0
-cross-lease deterministic linkage              = 0
-privacy bypass under component failure         = 0
-audit payloads containing protected values     = 0
-```
+These should be adapters/providers, not hard dependencies of BBM/1:
 
-Data-quality defects are measured separately from privacy-control failures.
+- KMS/HSM master-key provider;
+- HA/distributed state and queue provider;
+- OPA/Cedar policy provider;
+- SPIFFE/SPIRE workload identity;
+- WORM/SIEM evidence sinks;
+- Kubernetes/network policy packages;
+- remote MCP proxy and mediated stdio broker implementations;
+- Presidio/deeper free-text classifiers;
+- RAG/embedding privacy path;
+- quasi-identifier risk analysis and optional derived views;
+- target conformance suite and canary leak monitor.
+
+## Rule
+
+> Load the minimum privacy machinery required to enforce the policy.
+
+Enterprise hardening must not turn the default developer path into a mandatory infrastructure stack.

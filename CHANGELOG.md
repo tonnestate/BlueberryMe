@@ -1,36 +1,51 @@
 # Changelog
 
-## 0.2.0 — 2026-10-02
+## 0.3.0 — 2026-10-02
 
-### Added
+### Architecture
 
-- BBM/1 draft 0.2 policy semantics.
-- Safe-degradation policy for `NULL`, empty, malformed and transformation-failure states.
-- Explicit policy inheritance with `extends`.
-- International/Unicode-safe handling for names and addresses.
-- Explicit non-guessing birth-date formats controlled by policy.
-- Short `LEASE_HANDLE` representation backed only by authenticated encrypted tokens.
-- Structured rehydration requiring exact target, operation and data class.
-- `StructuredToolGuard` transport-neutral proxy core.
-- Rejection of BBM references embedded in free-form passthrough fields.
-- Batch protection with structural quarantine rather than whole-batch failure.
-- Encrypted capability state for secrets/PATs.
-- Payload-free evidence counters.
-- Standard safe error codes.
+- Replaced agent-visible reversible ciphertext with random lease-local handles only.
+- Added encrypted SOURCE references (pointer path) and encrypted CAPSULE references for values without a source.
+- Added origin-to-sink data-flow policy.
+- Added signed per-call Resolution Intent and trusted pull-style target resolution.
+- Removed the public/general rehydration/decode API from the reference runtime surface.
+- Added mandatory success-response re-tokenisation and catalogue-only target error handling.
+- Added persistent encrypted state provider (SQLite reference implementation).
+- Audit correlation now derives from persistent master key material rather than process-random keys.
 
-### Changed
+### Async
 
-- Default enterprise behavior is now: **Never fail open. Degrade safely.**
-- Unknown structured fields are suppressed rather than aborting otherwise safe records.
-- Rehydration is no longer exposed as unconstrained token-to-string substitution.
-- Demo now includes dirty and international data.
+- Added bounded async job pattern: `submit`, `status`, `get_result`, `cancel`.
+- Jobs carry references/capsules, not leases; the submission lease can expire/die after submit.
+- Added policy check at submit and again at execution.
+- Added one-job signed intent, deadline, replay state and target idempotency key.
+- Added encrypted result retention and new-lease re-tokenisation on retrieval.
+- Added strict `row_version` value-drift detection.
+- Added lazy async provider loading: enforce synchronously, enrich asynchronously.
+
+### Data quality
+
+- Unknown fields default to protected `UNKNOWN` handles instead of raw passthrough or whole-request failure.
+- Invalid protected values default to handles.
+- NULL/empty remain explicit distinct states.
+- Raw bytes are supported so invalid UTF-8/legacy payloads can remain byte-exact behind the boundary.
 
 ### Security
 
-- Rehydration Prompt Injection surface reduced by typed whole-field resolution.
-- Short handles are lease-scoped and disappear with lease destruction.
-- Capability store no longer keeps plaintext secrets.
+- Fixed error surfaces so `ValueError`/target exception text is never sent back to clients.
+- Added persistent consumed-intent state.
+- Added documentation for mediated stdio environment/network/filesystem controls.
+- Added explicit round-trip laundering and response-path requirements.
+- Added async revocation, replay, drift and result-retention semantics.
+
+### Tests
+
+- 34 reference tests covering handles, source immutability, value drift, response re-tokenisation, safe errors, capabilities, async jobs, persistence, data quality and lazy async loading.
+
+## 0.2.0 — 2026-10-02
+
+Safe-degradation policy, short handles, structured rehydration guard, encrypted capability state and transport-neutral proxy core.
 
 ## 0.1.0 — 2026-10-02
 
-Initial BBM/1 reference runtime with AES-SIV pseudonymisation, privacy leases, capabilities, policy-based transformations, payload-free audit and optional API/MCP adapters.
+Initial BBM/1 proof of concept.

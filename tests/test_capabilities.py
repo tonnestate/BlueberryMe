@@ -1,37 +1,33 @@
-import pytest
+from blueberryme.models import DataClass
+from blueberryme.proxy import StructuredToolGuard, TargetAdapter
 
-from blueberryme.errors import CapabilityDenied, LeaseDenied
+
+def test_secret_is_capability_not_model_context(runtime, lease):
+    secret = "github_pat_DO_NOT_LEAK_12345678901234567890"
+    cap = runtime.create_capability(secret, lease, target="GITHUB", operation="WRITE_REPO")
+    assert cap.startswith("BBM1C.")
+    assert secret not in cap
 
 
-def test_secret_is_only_exposed_to_exact_target_operation(runtime, lease):
-    secret = "github_pat_DO_NOT_PUT_THIS_IN_MODEL_CONTEXT_123456789"
-    handle = runtime.create_capability(
-        secret,
-        lease,
+def test_capability_resolves_only_inside_target_adapter(runtime, lease):
+    secret = "github_pat_DO_NOT_LEAK_12345678901234567890"
+    cap = runtime.create_capability(secret, lease, target="GITHUB", operation="WRITE_REPO")
+    guard = StructuredToolGuard(runtime)
+    target = TargetAdapter(runtime, target_id="GITHUB")
+    call = guard.authorize_tool_call(
+        {"credential": cap, "repo": "example/repo"},
+        lease_id=lease,
         target="GITHUB",
         operation="WRITE_REPO",
-        kind="PAT",
+        reference_fields={},
+        capability_fields={"credential"},
+        passthrough_fields={"repo"},
     )
-    assert secret not in handle
-    assert runtime.resolve_capability(
-        handle,
-        lease,
-        target="GITHUB",
-        operation="WRITE_REPO",
-    ) == secret
-    with pytest.raises(CapabilityDenied):
-        runtime.resolve_capability(handle, lease, target="GITHUB", operation="READ_REPO")
-
-
-def test_capability_store_contains_no_plaintext_secret(runtime, lease):
-    secret = "github_pat_EXAMPLE_12345678901234567890"
-    runtime.create_capability(secret, lease, target="GITHUB", operation="WRITE_REPO")
-    assert secret not in repr(runtime._capabilities)
-
-
-def test_capability_dies_with_lease(runtime, lease):
-    secret = "github_pat_EXAMPLE_12345678901234567890"
-    handle = runtime.create_capability(secret, lease, target="GITHUB", operation="WRITE_REPO")
-    runtime.destroy_lease(lease)
-    with pytest.raises(LeaseDenied):
-        runtime.resolve_capability(handle, lease, target="GITHUB", operation="WRITE_REPO")
+    seen = {}
+    response = target.execute(
+        call,
+        lambda args: seen.update(args) or {"ok": "yes"},
+        response_schema={"ok": DataClass.PUBLIC},
+    )
+    assert seen["credential"] == secret
+    assert secret not in str(response)

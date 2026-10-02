@@ -1,12 +1,16 @@
-version: BBM/1-draft-0.2
+version: BBM/1-draft-0.3
 strict_structured_data: true
 default_action: DENY
-unknown_field_action: SUPPRESS
+
+# Unknown structured fields are not passed through and do not abort the batch.
+# They are converted into opaque UNKNOWN handles so the source bytes remain recoverable
+# inside the trusted boundary if a later authorized target needs them.
+unknown_field_action: PROTECT
 
 quality:
   on_null: KEEP_NULL
   on_empty: KEEP_EMPTY
-  on_invalid: SUPPRESS
+  on_invalid: PROTECT
   on_transform_error: SUPPRESS
   accepted_birth_date_formats:
     - "%Y-%m-%d"

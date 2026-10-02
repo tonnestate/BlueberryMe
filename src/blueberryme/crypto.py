@@ -3,77 +3,88 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import re
+import secrets
+from typing import Any
 
 from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives.ciphers.aead import AESSIV
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from .models import DataClass, Lease
+from .models import DataClass
 
-TOKEN_RE = re.compile(r"^BBM1\.([A-Z_]+)\.([A-Za-z0-9_-]+)$")
-HANDLE_RE = re.compile(r"^BBM1H\.([A-Z_]+)\.([A-Z2-7]{12})$")
-CAPABILITY_RE = re.compile(r"^BBM1-CAP\.([A-Za-z0-9_-]{16,})$")
-REFERENCE_SEARCH_RE = re.compile(r"BBM1(?:H)?\.[A-Z_]+\.[A-Za-z0-9_-]+")
+HANDLE_RE = re.compile(r"^BBM1H\.([A-Z_]+)\.([A-Z2-7]{16})$")
+CAPABILITY_RE = re.compile(r"^BBM1C\.([A-Z2-7]{16})$")
+JOB_HANDLE_RE = re.compile(r"^BBM1J\.([A-Z2-7]{20})$")
+REFERENCE_SEARCH_RE = re.compile(r"BBM1(?:H\.[A-Z_]+|C)\.[A-Z2-7]{16}")
 
 
-class TokenError(ValueError):
+class CryptoError(ValueError):
     pass
 
 
-def _aad(lease: Lease, data_class: DataClass) -> list[bytes]:
-    return [
-        b"BBM/1",
-        data_class.value.encode("utf-8"),
-        lease.purpose.encode("utf-8"),
-        lease.scope.encode("utf-8"),
-    ]
+def _b32(nbytes: int) -> str:
+    return base64.b32encode(secrets.token_bytes(nbytes)).decode("ascii").rstrip("=")
 
 
-def tokenize(value: str, data_class: DataClass, lease: Lease) -> str:
-    cipher = AESSIV(bytes(lease.key))
-    encrypted = cipher.encrypt(value.encode("utf-8"), _aad(lease, data_class))
-    body = base64.urlsafe_b64encode(encrypted).decode("ascii").rstrip("=")
-    return f"BBM1.{data_class.value}.{body}"
+def random_handle(data_class: DataClass) -> str:
+    return f"BBM1H.{data_class.value}.{_b32(10)}"
 
 
-def short_handle(token: str, data_class: DataClass, lease: Lease) -> str:
-    digest = hmac.new(bytes(lease.key), token.encode("utf-8"), hashlib.sha256).digest()
-    body = base64.b32encode(digest).decode("ascii").rstrip("=")[:12]
-    return f"BBM1H.{data_class.value}.{body}"
+def random_capability_handle() -> str:
+    return f"BBM1C.{_b32(10)}"
 
 
-def parse_token(token: str) -> tuple[DataClass, bytes]:
-    match = TOKEN_RE.fullmatch(token)
-    if not match:
-        raise TokenError("Invalid BBM/1 crypto token format")
-    try:
-        data_class = DataClass(match.group(1))
-    except ValueError as exc:
-        raise TokenError("Unknown BBM/1 data class") from exc
-    body = match.group(2)
-    padded = body + "=" * ((4 - len(body) % 4) % 4)
-    try:
-        ciphertext = base64.urlsafe_b64decode(padded.encode("ascii"))
-    except Exception as exc:
-        raise TokenError("Invalid BBM/1 token encoding") from exc
-    return data_class, ciphertext
+def random_job_handle() -> str:
+    return f"BBM1J.{_b32(13)[:20]}"
 
 
 def parse_handle(handle: str) -> DataClass:
     match = HANDLE_RE.fullmatch(handle)
     if not match:
-        raise TokenError("Invalid BBM/1 lease handle format")
+        raise CryptoError("Invalid BBM/1 handle format")
     try:
         return DataClass(match.group(1))
     except ValueError as exc:
-        raise TokenError("Unknown BBM/1 data class") from exc
+        raise CryptoError("Unknown BBM/1 data class") from exc
 
 
-def rehydrate(token: str, lease: Lease) -> tuple[DataClass, str]:
-    data_class, ciphertext = parse_token(token)
-    cipher = AESSIV(bytes(lease.key))
+def canonical_json(value: Any) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def args_hash(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_json(payload)).hexdigest()
+
+
+def derive_key(master_key: bytes, label: str, context: bytes = b"") -> bytes:
+    if len(master_key) < 32:
+        raise CryptoError("Master key must be at least 32 bytes")
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b"BlueberryMe/0.3/" + label.encode("utf-8") + b"/" + context,
+    ).derive(master_key)
+
+
+def sign_bytes(key: bytes, payload: bytes) -> str:
+    return base64.urlsafe_b64encode(hmac.new(key, payload, hashlib.sha256).digest()).decode("ascii").rstrip("=")
+
+
+def verify_signature(key: bytes, payload: bytes, signature: str) -> bool:
+    return hmac.compare_digest(sign_bytes(key, payload), signature)
+
+
+def seal(key: bytes, plaintext: bytes, *, aad: bytes) -> tuple[bytes, bytes]:
+    nonce = secrets.token_bytes(12)
+    return nonce, AESGCM(key).encrypt(nonce, plaintext, aad)
+
+
+def open_sealed(key: bytes, nonce: bytes, ciphertext: bytes, *, aad: bytes) -> bytes:
     try:
-        plaintext = cipher.decrypt(ciphertext, _aad(lease, data_class))
+        return AESGCM(key).decrypt(nonce, ciphertext, aad)
     except InvalidTag as exc:
-        raise TokenError("Token authentication failed for this lease/scope/purpose") from exc
-    return data_class, plaintext.decode("utf-8")
+        raise CryptoError("Authenticated data could not be opened") from exc

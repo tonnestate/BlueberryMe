@@ -2,66 +2,56 @@
 
 ## Security objective
 
-BlueberryMe aims to prevent AI agents from receiving direct identifiers, credentials or other values that are not required for their authorized task.
+BlueberryMe aims to keep identity, credentials and general resolution authority outside AI agent/model context when the authorized task does not require them.
 
-## v0.2 security boundary
+## v0.3 boundary
 
-Trusted boundary:
+Trusted:
 
-- BlueberryMe runtime;
-- source systems intentionally placed behind it;
-- configured policy;
-- lease key material.
+- BlueberryMe gateway/runtime state;
+- source adapters;
+- configured deterministic policy;
+- master key/KMS integration;
+- registered trusted target adapters.
 
 Untrusted for direct identity/secrets:
 
-- LLM/model;
-- external agent harness;
+- model/agent;
 - model-generated text;
-- model-selected tool arguments until validated.
+- model-selected tool arguments until validated;
+- external target output until re-protected.
 
-## v0.2 hardening
+## Security-critical rules
 
-### Structured rehydration
+1. Agent-visible sensitive references are random handles only.
+2. There is no public general-purpose resolve/decode endpoint.
+3. Resolution requires a signed per-call intent, target, operation, current policy and structured field schema.
+4. Target success responses are re-tokenised before model return.
+5. Target exception text is never returned to the agent.
+6. Dirty data never causes raw-data fallback.
+7. Infrastructure failure is fail-closed.
+8. Source data is never rewritten by BlueberryMe.
+9. Async execution checks policy both at submit and execution time.
+10. SOURCE references enforce `row_version` by default.
 
-BlueberryMe does not perform find/replace de-tokenization in arbitrary model text. Rehydration accepts only a complete BBM reference in a declared structured field and checks target, operation, expected class, lease and class policy.
+## Key material
 
-### Safe data-quality degradation
+The HTTP reference gateway persists a local 32-byte master key by default so restart does not destroy audit correlation or encrypted job state. For production, inject approved key material (`BBM_MASTER_KEY_B64`) or integrate an organizational KMS/HSM.
 
-Malformed source data does not trigger a raw-data fallback. Default behavior suppresses malformed protected values and unknown fields.
+The local file provider is a usability/reference mechanism, not an HSM claim.
 
-### Short-handle storage
+## State
 
-LLM-friendly short handles map to authenticated encrypted tokens, not plaintext identities.
+The SQLite provider encrypts object payloads before persistence. SQLite is not presented as an HA/DORA-ready distributed store; it is the minimal persistent reference provider.
 
-### Capability storage
+## Async side effects
 
-Capability secrets are stored as authenticated ciphertext under the active lease key, not as plaintext runtime dictionary values.
+BlueberryMe supplies `job_id` as an idempotency key when supported by the target handler. Exactly-once external side effects require the target itself to enforce idempotency.
 
-### Lease destruction
+## Explicit non-goals
 
-Lease destruction removes handle and capability state and overwrites the active Python `bytearray` key before dropping references.
+See `docs/THREAT-MODEL.md`. In particular, v0.3 does not claim protection against host-root compromise or live trusted-process memory scraping.
 
-This is not a guarantee that every historical copy of key/plaintext bytes has been physically overwritten in a managed runtime.
+## Vulnerability reports
 
-## Explicit non-goals in v0.2
-
-v0.2 does not claim protection against:
-
-- root/administrator compromise of the BlueberryMe host;
-- live process-memory scraping;
-- hardware/side-channel attacks;
-- complete quasi-identifier detection in arbitrary free text;
-- deliberate out-of-band raw database/API paths;
-- compromised source systems;
-- a transparent production MCP transport proxy (the v0.2 proxy core is transport-neutral).
-
-## Fail-open prohibition
-
-A privacy-control failure must never cause BlueberryMe to return the original protected value as a convenience fallback.
-
-Source-data quality and privacy-control integrity are separate failure domains.
-
-## Reporting
-
-Do not include real personal data, credentials or production tokens in public vulnerability reports or issue examples.
+Do not include real personal data, credentials, production handles or source identifiers in public reports.

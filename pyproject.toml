@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "blueberryme"
-version = "0.2.0"
-description = "Open Agent Privacy Protocol & Runtime for privacy-preserving AI agent access to business data."
+version = "0.3.0"
+description = "Open Agent Privacy Protocol & Sensitive Data Bypass Runtime for privacy-preserving AI agent access."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-only" }

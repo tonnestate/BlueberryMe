@@ -4,319 +4,318 @@
 
 # BlueberryMe
 
-**Open Agent Privacy Protocol & Runtime** for privacy-preserving access to business data.
+**Open Agent Privacy Protocol & Sensitive Data Bypass Runtime.**
 
-BlueberryMe sits between sensitive enterprise data and AI agents. The design goal is simple:
+BlueberryMe sits between sensitive business data and AI agents. Its design goal is not to rewrite the source of truth and not to ask a model to "forget" data after the fact.
 
-> Give agents the information required for the task, not the identity or secret behind it.
+> **The agent carries references, never values. Authority to resolve them is minted per call, outside the agent, and bound to one target and one operation.**
 
-BlueberryMe v0.2.0 is a reference implementation of the experimental **BBM/1 Agent Privacy Protocol**. It is designed to support privacy-by-design controls in EU business environments. It is not a legal compliance certificate.
+BlueberryMe v0.3.0 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs in EU business environments. It is **not** a legal compliance certificate.
 
-## What changed in v0.2
+## Why v0.3 is different
 
-v0.2 turns the v0.1 proof of concept into a safer runtime core for dirty enterprise data:
+v0.1/v0.2 proved reversible protection, leases, policy and safe degradation. v0.3 moves the differentiator into code:
 
-- **Safe degradation for bad data:** `NULL`, empty, malformed and international values do not automatically abort a workflow.
-- **Fail closed at the privacy boundary:** unknown fields are suppressed by default; missing/invalid privacy authorization is denied.
-- **Policy-as-code inheritance:** organization profiles can extend a base YAML policy.
-- **Short LLM-safe lease handles:** `BBM1H.PERSON.XXXXXXXXXXXX` instead of long ciphertext in model context.
-- **No plaintext handle store:** short handles resolve only to encrypted AES-SIV tokens.
-- **Structured Rehydration Guard:** only complete references in declared structured fields can be resolved. No string replacement inside free text.
-- **Target + operation authorization:** rehydration is bound to an exact target and operation.
-- **Encrypted capability store:** PAT/API-key capability state is held as authenticated ciphertext, not plaintext.
-- **Batch degradation:** bad record structure can be quarantined without stopping safe records.
-- **Payload-free evidence counters:** privacy and data-quality outcomes are measurable without logging protected values.
-- **Transport-neutral tool/MCP privacy middleware core:** tool results can be protected before model ingress and tool requests can be rehydrated only at typed fields.
+- **Random lease-local handles only.** No AES-SIV/ciphertext is exposed to the agent.
+- **Pointer-first bypass.** Source-backed identifiers are represented as encrypted source references, not copied plaintext values.
+- **Encrypted capsules for values without a source.** User input and transient values can still cross an async boundary without plaintext storage.
+- **Signed Resolution Intent.** Resolution authority is minted outside the agent and bound to one target, operation, payload and expiry.
+- **Pull-model target adapter.** There is no public/general `decode()` API.
+- **Mandatory response re-tokenisation.** A target cannot legitimately return raw identity to the model path.
+- **Safe error path.** Target exception text is never returned; only catalogue codes cross the boundary.
+- **Origin-to-sink data-flow policy.** Field permission alone is not sufficient.
+- **Persistent encrypted runtime state.** Leases, handles, references, jobs and audit survive a process restart when the persistent runtime is used.
+- **Persistent audit derivation.** Audit references derive from the runtime master key instead of a new process-random key on every start.
+- **Bounded async jobs.** A job carries encrypted references/capsules, not a lease. No lease renewal and no workflow engine are required for single jobs up to 24 hours.
+- **Double policy check for async.** Once at submit, once at execution.
+- **Value-drift check.** A source pointer can bind `row_version`; changed source data fails the item safely.
+- **Progressive async loading.** Optional expensive providers are lazy-loaded and see only the already protected view.
 
-## Architecture
-
-```text
-Database / API / File / MCP server
-              |
-              v
-+----------------------------------+
-|          BlueberryMe             |
-|                                  |
-|  Policy Engine                   |
-|  Data Quality Degradation        |
-|  Privacy Compiler                |
-|  AES-SIV Tokenization            |
-|  Lease Handle Store (encrypted)  |
-|  Rehydration Guard               |
-|  Capability Broker               |
-|  Evidence                        |
-+----------------+-----------------+
-                 |
-                 | privacy-compiled context
-                 v
-          Any AI Agent / LLM
-                 |
-                 | typed pseudonymous tool call
-                 v
-+----------------+-----------------+
-| BlueberryMe StructuredToolGuard  |
-+----------------+-----------------+
-                 |
-                 | authorized rehydration only
-                 v
-          Real target system
-```
-
-The model, agent and harness are treated as untrusted for direct identifiers and secrets.
-
-## The core rule
-
-**Never fail open. Degrade safely.**
-
-A `NULL` date, malformed email or foreign name is a data-quality condition. It must not automatically bring down an otherwise safe process.
-
-A missing policy, unauthorized operation, invalid privacy reference or bypass attempt is a privacy-control condition. It must not silently expose raw data.
-
-Example default behavior:
-
-| Condition | Default v0.2 behavior |
-|---|---|
-| `NULL` in known field | preserve `NULL` |
-| empty known field | preserve empty value |
-| malformed value | suppress field |
-| unknown/new column | suppress field |
-| bad record structure in batch | quarantine record |
-| unknown data class in schema | deny request |
-| invalid/expired lease | deny |
-| wrong target/operation | deny |
-| token embedded in free text for rehydration | deny |
-| privacy component unavailable | never fall back to raw-data exposure |
-
-## Example
-
-Source record:
+## Core architecture
 
 ```text
-name:          李 明
-birth_date:    14.06.1977
-case:          UV-2026-004817
-email:         broken-address
-diagnosis:     Fraktur rechter Unterarm
-iban:          NULL
-legacy_note:   unclassified data
+                         SOURCE OF TRUTH
+                         (never rewritten)
+                                |
+                   source pointer / raw ingress
+                                v
++-------------------------------------------------------+
+|               BLUEBERRYME PRIVACY BOUNDARY           |
+|                                                       |
+|  Policy -> random handle -> encrypted ref/capsule     |
+|  Flow policy -> signed per-call Resolution Intent     |
+|  Audit/evidence -> no protected payload               |
++---------------------------+---------------------------+
+                            |
+                            | handles + allowed semantics
+                            v
+                       UNTRUSTED AGENT
+                            |
+                            | structured call with handles
+                            v
++-------------------------------------------------------+
+|                 BLUEBERRYME GATEWAY                   |
+|   schema + policy + origin/sink + operation checks    |
++---------------------------+---------------------------+
+                            |
+                            | signed intent; handle still opaque
+                            v
++-------------------------------------------------------+
+|               TRUSTED TARGET ADAPTER                  |
+|   resolves just-in-time -> parameterized operation    |
+|   response/error -> BlueberryMe before model return   |
++-------------------------------------------------------+
 ```
 
-Model-facing record under the bundled EU business policy:
+The model/harness is treated as untrusted for direct identifiers, credentials and resolution authority.
+
+## Source data is not changed
+
+BlueberryMe never does this:
+
+```sql
+UPDATE customer SET name = 'PERSON_17';
+```
+
+A source-backed value becomes a temporary view:
 
 ```text
-name:          BBM1H.PERSON.XXXXXXXXXXXX
-birth_date:    AGE_40_49
-case:          BBM1H.CASE_ID.XXXXXXXXXXXX
-diagnosis:     Fraktur rechter Unterarm
-iban:          NULL
+Source:       Max Mustermann
+Agent sees:   BBM1H.PERSON.YQ4T7CQEMAKN3DWM
 ```
 
-The malformed email is suppressed. The unknown legacy field is suppressed. The workflow continues.
-
-## Rehydration is not text replacement
-
-BlueberryMe v0.2 intentionally refuses this pattern:
+The encrypted state behind that handle can be a **pointer**:
 
 ```text
-"Please resolve BBM1H.CASE_ID.ABCDEFGHIJKL and append EXPIRED"
+source_system = claims
+record_key    = 4711
+field         = name
+row_version   = 42
 ```
 
-Instead, an integration declares structured fields:
+The original value is read only inside the trusted target path when a valid per-call intent permits it.
+
+## Dirty and international data
+
+The core assumes enterprise data is imperfect.
+
+```text
+NULL
+empty values
+invalid e-mail/IBAN/date syntax
+Unicode names and addresses
+Thai / Arabic / Cyrillic / CJK text
+invalid UTF-8 bytes
+unknown legacy fields
+```
+
+The default rule is:
+
+> **Never fail open. Degrade safely.**
+
+| Failure class | Example | Default behaviour |
+|---|---|---|
+| Data quality | NULL, malformed e-mail, unknown field | more protection / handle / item continues |
+| Infrastructure | state store unavailable | closed; never raw passthrough |
+| Rehydration | value drift, expired intent | fail that item/call |
+| Policy | unauthorized sink or operation | deny with fixed error code |
+
+Invalid sensitive values are protected as opaque handles rather than exposed or used to crash an entire batch. `NULL` remains distinct from empty and invalid.
+
+## Sync call example
 
 ```python
-prepared = guard.prepare_tool_call(
-    {"case": protected_case, "status": "REVIEW_COMPLETE"},
+call = guard.authorize_tool_call(
+    {"case": case_handle},
     lease_id=lease_id,
     target="SOURCE_SYSTEM",
     operation="LOOKUP",
     reference_fields={"case": DataClass.CASE_ID},
-    passthrough_fields={"status"},
+)
+
+response = target.execute(
+    call,
+    handler,
+    response_schema={"case": DataClass.CASE_ID},
 )
 ```
 
-Only the complete `case` value can be resolved, and only if policy + lease + target + operation + data class all match.
+The handler sees the real case only inside the trusted target adapter. The model-visible response is tokenised again.
 
-## Token modes
+## Async jobs without lease renewal
 
-BBM/1 v0.2 supports two representation modes:
-
-### `LEASE_HANDLE`
-
-Short agent-facing handle:
+For a bounded asynchronous call:
 
 ```text
-BBM1H.PERSON.6X5HNWQ2B4FA
+Agent -> submit(handles)
+          |
+          | policy check #1
+          | handles -> encrypted pointer/capsule envelope
+          v
+      trusted Job Store
+          |
+     original lease may expire
+          |
+          v
+      Target Worker
+          |
+          | policy check #2
+          | row_version check
+          | per-job idempotency key
+          v
+      encrypted Result Store
+          |
+Agent -> get_result()
+          |
+          | new lease
+          v
+      re-tokenised result
 ```
 
-The runtime stores only:
+v0.3 deliberately supports **bounded single jobs**, not a multi-day workflow platform.
+
+Job API semantics:
 
 ```text
-short handle -> authenticated encrypted BBM crypto token
+submit
+status
+get_result
+cancel
 ```
 
-No plaintext person-to-token mapping is required.
+Maximum reference implementation deadline: 24 hours.
 
-### `CRYPTO_TOKEN`
+## Progressive async loading
 
-Self-contained authenticated AES-SIV token:
+Privacy enforcement remains synchronous. Optional expensive modules can be lazy-loaded afterwards:
 
 ```text
-BBM1.PERSON.<ciphertext>
+FAST PATH (blocking)
+policy -> handle -> flow -> intent
+
+ASYNC OPTIONAL PATH
+Presidio / deeper risk checks / evidence enrichment / provider warm-up
 ```
 
-Useful for machine-to-machine flows where token length is less important.
+Normative rule:
 
-## International and dirty data
+> **Enforce synchronously, enrich asynchronously.**
 
-The core deliberately avoids Western-only assumptions for names and addresses. Unicode values such as Chinese, Thai, Arabic or Cyrillic names can be tokenized without normalization into a Latin naming model.
+Async enrichers receive the protected view only. If an optional provider is not loaded, raw data is never temporarily passed through.
 
-Date parsing does **not** guess ambiguous formats. Accepted formats are explicit policy settings. The bundled EU profile accepts:
+## Persistent state without building a crypto monster
+
+The reference runtime can use an encrypted SQLite state file. This is deliberately a small local/self-hosted baseline, not an HA database platform.
 
 ```text
-YYYY-MM-DD
-DD.MM.YYYY
-YYYYMMDD
+.blueberryme/
+  state.db       # encrypted object payloads
+  master.key     # local reference key; mode 0600 where supported
 ```
 
-Organizations can extend this list in policy.
+Production deployments can inject the 32-byte master key through `BBM_MASTER_KEY_B64` or replace the local key source with an approved KMS/HSM integration. BBM/1 does not depend on a specific KMS.
+
+The agent never receives encrypted payloads from the state store; it receives only random handles.
 
 ## Policy as code
 
-`policies/eu-business.yaml` extends `policies/base.yaml`.
-
-Example:
+The bundled policy is intentionally readable YAML:
 
 ```yaml
-extends: base.yaml
-
 classes:
   PERSON:
     action: TOKENIZE
-    token_mode: LEASE_HANDLE
     rehydrate:
       LETTER_SERVICE: ["DELIVER"]
 
-  EMAIL:
-    action: TOKENIZE
-    quality:
-      on_invalid: SUPPRESS
-
   IBAN:
-    action: DENY
+    action: TOKENIZE
+    rehydrate:
+      PAYMENT_SERVICE: ["PAY"]
+
+  HEALTH_DATA:
+    action: ALLOW
+    allowed_purposes: ["CLAIM_REVIEW"]
+
+flows:
+  - origin_scope: "*"
+    purposes: ["CLAIM_REVIEW"]
+    sinks:
+      LETTER_SERVICE: ["DELIVER"]
+      PAYMENT_SERVICE: ["PAY"]
 ```
 
-Supported data-quality actions:
+OPA/Cedar can be future policy providers; they are not mandatory dependencies of the core.
 
-```text
-KEEP_NULL
-KEEP_EMPTY
-KEEP_VALUE
-SUPPRESS
-ERROR
-```
+## Secrets are capabilities
 
-The bundled high-safety profile uses suppression rather than unsafe passthrough for malformed protected fields.
-
-## Capabilities for secrets
-
-Secrets should not be model context.
+A PAT/API key does not become pseudonymous text. It becomes a capability:
 
 ```text
 github_pat_...
       |
       v
-BlueberryMe
-      |
-      v
-BBM1-CAP.<opaque handle>
+BBM1C.N7YQ2B5P3HV4K6WM
 ```
 
-In v0.2 the runtime does not keep the capability secret in plaintext state. The secret is stored as authenticated AES-SIV ciphertext under the active lease key and is resolved only for the exact allowed target + operation.
-
-## Evidence
-
-`runtime.evidence_snapshot()` reports control-plane state and counters, not protected payloads.
-
-Example fields:
-
-```text
-runtime_version
-active_leases
-active_privacy_handles
-active_capabilities
-persistent_identity_mapping=false
-plaintext_capability_store=false
-metrics
-```
-
-This allows organizations to distinguish **poor source-data quality** from a **privacy-control failure**.
+It can resolve only for the target + operation for which it was created. There is no public secret-resolution endpoint.
 
 ## Quick start
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e .[dev]
 pytest -q
 blueberryme demo
 ```
 
-Optional integrations:
+Current reference suite:
+
+```text
+34 tests passing
+```
+
+HTTP gateway:
 
 ```bash
 pip install -e .[api]
-pip install -e .[presidio]
-pip install -e .[mcp]
+blueberryme serve
 ```
 
-Run the HTTP reference gateway:
+By default the HTTP gateway uses `.blueberryme/state.db` and a persistent local key. Use environment/KMS injection for production key material.
 
-```bash
-uvicorn blueberryme.api:app --host 127.0.0.1 --port 8787
-```
+## MCP
 
-## MCP status
+MCP is a binding, not the protocol itself.
 
-v0.2 includes a small MCP compatibility adapter and a **transport-neutral proxy/enforcement core** (`StructuredToolGuard`).
+A model-invoked `protect()` tool is not a sufficient privacy boundary because the raw value may already have entered the model. A conformant deployment mediates MCP traffic before model ingress and routes target responses back through the same privacy boundary.
 
-A model-initiated `blueberry.protect()` tool is **not** considered a sufficient privacy boundary because raw data may already have reached the model. Production deployments should place BlueberryMe between the agent client and upstream data/tool implementation.
+`stdio` is not inherently forbidden. **Unmediated stdio from the agent zone is.** A stdio broker must also control the child environment, inherited credentials, filesystem access and network egress.
 
-A fully transparent stdio/HTTP MCP transport proxy is not claimed in v0.2.
+See [`docs/MCP-BINDING.md`](docs/MCP-BINDING.md).
 
-## EU business design goal
+## What v0.3 does not claim
 
-BlueberryMe is designed to provide technical controls that can support principles such as:
+- It does not magically anonymise information that the task genuinely requires the model to read.
+- It does not solve every quasi-identifier/re-identification problem in arbitrary free text.
+- It does not make a deployment non-bypassable if the agent still has direct network/DB/tool routes around the gateway.
+- It does not provide native HSM/KMS, OPA, SPIFFE, WORM or HA clustering.
+- SQLite is a reference persistent store, not the recommended HA store for a large regulated production deployment.
+- Exactly-once external side effects require the target to honour the supplied `idempotency_key`; BlueberryMe alone cannot undo a remote side effect after a worker crash.
+- It is not a legal declaration of GDPR, DORA or sectoral compliance.
 
-- purpose limitation;
-- data minimisation;
-- storage limitation;
-- pseudonymisation;
-- privacy by design/default;
-- controlled re-identification;
-- accountability and evidence.
+The intent is a **simple data path with a hard privacy boundary**, not maximum cryptography everywhere.
 
-See [`docs/EU-BUSINESS-PROFILE.md`](docs/EU-BUSINESS-PROFILE.md).
+## Documentation
 
-**BlueberryMe does not determine lawful basis, controller/processor roles, DPIA requirements, international-transfer rules, retention law, data-subject rights or sector-specific legal obligations.** Those remain organizational/legal responsibilities.
-
-## Security boundary
-
-v0.2 does not claim protection against:
-
-- a compromised host administrator/root account;
-- live memory scraping of the BlueberryMe process;
-- side-channel attacks;
-- perfect detection of every quasi-identifier in arbitrary free text;
-- direct raw-data paths that an organization deliberately leaves outside the BlueberryMe boundary.
-
-See [`SECURITY.md`](SECURITY.md).
+- [`docs/BBM-1.md`](docs/BBM-1.md) — protocol draft
+- [`docs/BOUNDARY.md`](docs/BOUNDARY.md) — enforcement and non-bypassability
+- [`docs/ASYNC-JOBS.md`](docs/ASYNC-JOBS.md) — bounded async job model
+- [`docs/EU-BUSINESS-PROFILE.md`](docs/EU-BUSINESS-PROFILE.md) — EU business design profile
+- [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) — key threats and controls
+- [`docs/ENTERPRISE-ROADMAP.md`](docs/ENTERPRISE-ROADMAP.md) — intentionally deferred enterprise providers
 
 ## License
 
-BlueberryMe is released under **GPL-3.0-only**.
-
-GPLv3 permits commercial use. Internal use does not by itself require an organization to publish its proprietary internal software. Distribution/conveying of GPL-covered or derivative software can trigger GPL source-code obligations.
-
-The project is intentionally structured so that the copyright holder may later offer a separate proprietary/commercial license. To preserve that option, third-party code contributions require an explicit contributor agreement.
-
-See [`COMMERCIAL-LICENSING.md`](COMMERCIAL-LICENSING.md).
+BlueberryMe is released under **GPL-3.0-only**. GPLv3 permits commercial use. The project is structured so the copyright holder can later offer separate proprietary/commercial terms; see [`COMMERCIAL-LICENSING.md`](COMMERCIAL-LICENSING.md).

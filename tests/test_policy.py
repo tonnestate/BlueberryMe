@@ -1,14 +1,21 @@
 from pathlib import Path
 
-from blueberryme.models import DataClass, QualityAction, TokenMode
+from blueberryme.models import DataClass, QualityAction, Transform
 from blueberryme.policy import load_policy
 
 
-def test_policy_inheritance_and_quality_defaults():
-    path = Path(__file__).parents[1] / "policies" / "eu-business.yaml"
-    policy = load_policy(path)
-    assert policy.strict_structured_data is True
-    assert policy.unknown_field_action is QualityAction.SUPPRESS
-    person = policy.for_class(DataClass.PERSON, "CLAIM_REVIEW")
-    assert person.token_mode is TokenMode.LEASE_HANDLE
-    assert "%d.%m.%Y" in policy.default_quality.accepted_birth_date_formats
+def test_policy_inheritance_and_safe_defaults():
+    policy = load_policy(Path(__file__).parents[1] / "policies" / "eu-business.yaml")
+    assert policy.unknown_field_action is QualityAction.PROTECT
+    assert policy.for_class(DataClass.PERSON, "CLAIM_REVIEW").action is Transform.TOKENIZE
+    assert policy.for_class(DataClass.HEALTH_DATA, "CLAIM_REVIEW").action is Transform.ALLOW
+
+
+def test_flow_policy_is_origin_to_sink():
+    policy = load_policy(Path(__file__).parents[1] / "policies" / "eu-business.yaml")
+    assert policy.flow_allowed(
+        origin_scope="CASE:4711", purpose="CLAIM_REVIEW", target="SOURCE_SYSTEM", operation="LOOKUP"
+    )
+    assert not policy.flow_allowed(
+        origin_scope="CASE:4711", purpose="CLAIM_REVIEW", target="EVIL_SINK", operation="UPLOAD"
+    )

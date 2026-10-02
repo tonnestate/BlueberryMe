@@ -1,176 +1,210 @@
-# BBM/1 — Agent Privacy Protocol, draft 0.2
+# BBM/1 — Agent Privacy Protocol
 
-Status: experimental reference specification.
+Status: **experimental draft 0.3**.
 
 ## 1. Objective
 
-BBM/1 defines a vendor-neutral privacy contract between sensitive data sources and AI agents. It separates semantic task context from identity, secrets, authorization, retention and re-identification capability.
-
-## 2. Trust model
-
-The agent/model/harness is untrusted for direct identifiers and credentials. The BlueberryMe privacy boundary must enforce policy **before model ingress** and **before re-identification at egress**.
-
-## 3. Required privacy context
-
-A privacy lease binds at least:
-
-```text
-agent_id
-purpose
-scope
-lease_id
-expires_at
-allowed target operations
-```
-
-A protected value has a `data_class` and a policy transformation.
-
-## 4. Transformations
-
-- `ALLOW`: visible because policy explicitly permits it for the purpose.
-- `TOKENIZE`: reversible scoped pseudonym.
-- `GENERALIZE`: reduced precision.
-- `DENY`: not exposed to the model.
-
-Unknown structured fields must never implicitly default to `ALLOW` in strict mode.
-
-## 5. Data quality semantics
-
-BBM/1 distinguishes source-data quality from privacy-control integrity.
-
-A compliant high-safety implementation should support field-level behavior for:
-
-```text
-NULL
-EMPTY
-INVALID
-TRANSFORM_ERROR
-UNKNOWN_FIELD
-```
-
-The default high-safety behavior is:
-
-```text
-NULL             -> KEEP_NULL
-EMPTY            -> KEEP_EMPTY
-INVALID          -> SUPPRESS
-TRANSFORM_ERROR  -> SUPPRESS
-UNKNOWN_FIELD    -> SUPPRESS
-```
-
-A bad field must not require a whole workflow to fail if the field can be safely withheld.
-
-A privacy-control failure (missing policy, invalid lease, unauthorized target/operation, unauthenticated reference) must never degrade to raw-data exposure.
+BBM/1 defines a vendor-neutral contract for keeping identity, secrets and resolution authority out of an AI agent path whenever the task does not require them.
 
 Normative principle:
 
-> Never fail open. Degrade safely.
+> The agent carries references, never values. Authority to resolve them is minted per call, outside the agent, and bound to one target and one operation.
 
-## 6. Scoped reversible tokenization
+## 2. Trust zones
 
-The reference runtime uses AES-SIV authenticated deterministic encryption with a random 64-byte per-lease key. Associated data binds ciphertext to:
+BBM/1 distinguishes:
+
+1. **Source zone** — authoritative business data; never rewritten by BBM.
+2. **Privacy boundary** — policy, handles, references/capsules, evidence.
+3. **Agent zone** — untrusted for direct identity, credentials and general decode authority.
+4. **Target zone** — trusted adapter that may resolve only under a valid Resolution Intent.
+
+## 3. Agent representation
+
+An agent-visible sensitive reference MUST be random and opaque:
 
 ```text
-BBM protocol version
-data class
+BBM1H.<DATA_CLASS>.<RANDOM>
+```
+
+Credentials use:
+
+```text
+BBM1C.<RANDOM>
+```
+
+The agent-visible reference MUST NOT contain source plaintext or reversible ciphertext.
+
+## 4. Reference store
+
+A handle resolves inside the privacy boundary to one of:
+
+### SOURCE
+
+```text
+source_id
+record_key
+field
+row_version (optional but recommended)
+```
+
+### CAPSULE
+
+Encrypted byte/string/structured data that has no stable source, such as user input or a transient external value.
+
+### CAPABILITY
+
+Encrypted secret material plus a fixed target and operation.
+
+The Reference Store is real state. Implementations MUST NOT market it as "no mapping/state". The design goal is **no plaintext identity mapping** and no duplicate shadow source database.
+
+## 5. Leases
+
+A lease binds at least:
+
+```text
+tenant
+agent
 purpose
 scope
+expiry
+allowed target operations
 ```
 
-Two representation modes are defined:
+Handles are lease-local. Possession of a handle alone grants no resolution authority.
 
-### CRYPTO_TOKEN
+## 6. Resolution Intent
 
-```text
-BBM1.<DATA_CLASS>.<URLSAFE_BASE64_CIPHERTEXT>
-```
-
-### LEASE_HANDLE
+The gateway validates a structured call and mints a signed, short-lived Resolution Intent containing at least:
 
 ```text
-BBM1H.<DATA_CLASS>.<SHORT_OPAQUE_ID>
-```
-
-A lease handle maps only to an authenticated crypto token, never directly to plaintext.
-
-Properties:
-
-- identical value + class within one lease -> stable reference;
-- a different lease -> different reference;
-- lease destruction removes short-handle state and the key;
-- no persistent plaintext person-to-token lookup is required.
-
-## 7. Structured rehydration
-
-Rehydration is a privileged operation, not a string transformation.
-
-A request must bind:
-
-```text
-complete BBM reference
-lease
+intent_id
+call_id
+lease_id
 target
 operation
-expected data class
-```
-
-Rehydration must fail unless:
-
-```text
-lease exists and is active
-target is lease-authorized
-operation is lease-authorized
-reference is a complete BBM token/handle
-reference authenticates under the lease
-expected data class matches
-class policy authorizes target + operation
-```
-
-Implementations must not search arbitrary free text and replace embedded BBM tokens with plaintext.
-
-## 8. Capability handles
-
-Credentials and secrets are represented as opaque capability handles:
-
-```text
-BBM1-CAP.<opaque-id>
-```
-
-The reference runtime encrypts the underlying secret under the active lease key. Resolution requires the exact target + operation. Secret material must be delivered directly to the target integration/process and must not be returned to model context.
-
-## 9. Retention
-
-Source-data lifetime, privacy-lease lifetime, provider retention and audit lifetime are separate concepts.
-
-On lease destruction the runtime removes:
-
-- lease encryption key;
-- short privacy-handle state;
-- active capability state;
-- lease-owned temporary state.
-
-## 10. Audit and evidence
-
-Audit/evidence may contain control-plane facts such as:
-
-```text
-event_type
-pseudonymous lease/agent/scope refs
 purpose
-data_class
-decision
-count
-timestamp
-target
-operation
+handles
+hash(arguments)
+policy_version
+expiry
 ```
 
-Raw values, resolved values, ciphertext, tokens, handles and credentials must not be copied into normal audit payloads.
+A conformant target adapter MUST validate audience, operation, payload binding, expiry, replay state and current policy before resolving.
 
-## 11. Proxy placement
+There is no general model-accessible `decode(handle)` operation.
 
-A model-callable privacy tool is not sufficient as the only boundary. BlueberryMe should be placed so that sensitive upstream data is transformed before it enters agent/model context.
+## 7. Pull resolution
 
-Tool outputs: protect before returning to model.
+Resolution occurs in the trusted target path. The agent submits handles. A trusted target adapter pulls the corresponding source value/capsule only after validating the per-call intent.
 
-Tool inputs requiring real identity: resolve only at declared structured fields immediately before the authorized target operation.
+Resolution MUST occur into typed/parameterized fields. Implementations MUST NOT interpolate rehydrated values into arbitrary strings, URLs, SQL or templates.
+
+## 8. Mandatory return path
+
+Every model-visible target success response MUST cross the privacy boundary again. Sensitive response fields become new handles.
+
+Target errors MUST use fixed catalogue codes. Raw exception strings are forbidden on the agent path.
+
+This requirement prevents round-trip laundering:
+
+```text
+agent -> target rehydrates -> target stores plaintext -> agent reads target back
+```
+
+The read response must be re-tokenised.
+
+## 9. Data-flow policy
+
+BBM/1 policy is not only field policy. It includes origin-to-sink permission:
+
+```text
+origin_scope × purpose × target × operation
+```
+
+An injected instruction cannot authorize a sink that the deterministic data-flow policy denies.
+
+## 10. Data quality and failure classes
+
+BBM/1 separates four failure classes:
+
+### DATA_QUALITY
+NULL, empty, malformed syntax, unknown legacy fields. Default: increase protection and continue the safe item/batch where possible.
+
+### INFRASTRUCTURE
+State/KMS/policy infrastructure unavailable. Default: closed; never raw passthrough.
+
+### REHYDRATION
+Value drift, expired/invalid intent, missing source. Default: isolate the call/item.
+
+### POLICY
+Unauthorized target/operation/scope. Default: deny with a fixed error code.
+
+Normative rule:
+
+> Never fail open. Degrade safely.
+
+## 11. Byte/value exactness
+
+BBM must not modify the source of truth. Capsules support raw bytes so invalid UTF-8 and legacy encodings can be preserved without normalization.
+
+Lossy generalisation is not a core source transformation. A deployment may generate an optional derived agent view, but that MUST NOT replace or rewrite the authoritative value.
+
+## 12. Async single jobs
+
+A bounded async job carries references/capsules, **not the original lease**.
+
+Submission:
+
+```text
+lease handles -> policy check #1 -> encrypted job envelope -> signed Job Intent
+```
+
+Execution:
+
+```text
+policy check #2 -> value-drift check -> target operation -> encrypted result
+```
+
+Retrieval:
+
+```text
+encrypted result -> new lease -> model-visible re-tokenised response
+```
+
+The initial lease may expire immediately after submission.
+
+A Job Intent MUST be bound to one job, target, operation, purpose, envelope hash and deadline. v0.3 caps the reference deadline at 24 hours.
+
+## 13. Idempotency
+
+`job_id` is the target idempotency key. The BBM runtime prevents a completed job from being re-executed by its own worker path. Exactly-once semantics for external side effects still require the target to implement idempotency.
+
+## 14. Value drift
+
+A SOURCE reference SHOULD capture a source version/ETag. Default behavior on mismatch is failure (`BBM_VALUE_DRIFT`). A future policy may allow operation-specific drift, but v0.3 is strict.
+
+## 15. Audit
+
+Normal audit MUST NOT contain:
+
+```text
+raw values
+resolved values
+ciphertext
+tokens/handles
+secrets
+payloads
+```
+
+Audit subject references are derived with a tenant + purpose + retention-epoch scoped HMAC key derived from persistent master key material. The master key must not be regenerated on every process start in a persistent deployment.
+
+## 16. Async enrichment
+
+Optional expensive providers may be lazy-loaded only after the synchronous privacy decision. They receive protected payloads only.
+
+> Enforce synchronously, enrich asynchronously.
+
+## 17. Transport bindings
+
+BBM/1 is transport-independent. MCP is the first reference binding. Direct function calling, HTTP tools and A2A can implement the same semantics.
