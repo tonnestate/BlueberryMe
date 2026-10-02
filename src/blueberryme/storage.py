@@ -13,6 +13,9 @@ from .errors import InfrastructureError
 
 class StateBackend(Protocol):
     def put(self, kind: str, object_id: str, payload: bytes, expires_at: float | None = None) -> None: ...
+    def compare_and_put(
+        self, kind: str, object_id: str, payload: bytes, expected: bytes, expires_at: float | None = None
+    ) -> bool: ...
     def get(self, kind: str, object_id: str) -> bytes | None: ...
     def delete(self, kind: str, object_id: str) -> None: ...
     def count(self, kind: str) -> int: ...
@@ -33,6 +36,16 @@ class MemoryStateBackend:
     def put(self, kind: str, object_id: str, payload: bytes, expires_at: float | None = None) -> None:
         with self._lock:
             self._objects[(kind, object_id)] = (bytes(payload), expires_at)
+
+    def compare_and_put(
+        self, kind: str, object_id: str, payload: bytes, expected: bytes, expires_at: float | None = None
+    ) -> bool:
+        with self._lock:
+            current = self._objects.get((kind, object_id))
+            if current is None or current[0] != bytes(expected):
+                return False
+            self._objects[(kind, object_id)] = (bytes(payload), expires_at)
+            return True
 
     def get(self, kind: str, object_id: str) -> bytes | None:
         with self._lock:
@@ -137,6 +150,26 @@ class SQLiteStateBackend:
         except sqlite3.Error as exc:
             raise InfrastructureError("State backend write failed") from exc
 
+    def compare_and_put(
+        self, kind: str, object_id: str, payload: bytes, expected: bytes, expires_at: float | None = None
+    ) -> bool:
+        """Atomic conditional write: succeeds only if the stored payload is still `expected`.
+
+        Encrypted payloads carry a fresh random nonce on every write, so the stored blob
+        itself is a unique version token. A single UPDATE is atomic in SQLite, which makes
+        this safe across threads and processes sharing the same database file.
+        """
+        try:
+            with self._lock, self._connect() as conn:
+                cursor = conn.execute(
+                    "UPDATE objects SET payload=?, expires_at=?, updated_at=? "
+                    "WHERE kind=? AND object_id=? AND payload=?",
+                    (sqlite3.Binary(payload), expires_at, time.time(), kind, object_id, sqlite3.Binary(expected)),
+                )
+                return cursor.rowcount == 1
+        except sqlite3.Error as exc:
+            raise InfrastructureError("State backend write failed") from exc
+
     def get(self, kind: str, object_id: str) -> bytes | None:
         try:
             with self._lock, self._connect() as conn:
@@ -228,17 +261,42 @@ class SecureState:
         return canonical_json({"protocol": "BBM/1", "kind": kind, "id": object_id})
 
     def put_json(self, kind: str, object_id: str, value: dict, expires_at: float | None = None) -> None:
+        self.backend.put(kind, object_id, self._seal_json(kind, object_id, value), expires_at)
+
+    def _seal_json(self, kind: str, object_id: str, value: dict) -> bytes:
         nonce, ciphertext = seal(self.key, canonical_json(value), aad=self._aad(kind, object_id))
-        self.backend.put(kind, object_id, nonce + ciphertext, expires_at)
+        return nonce + ciphertext
+
+    def _open_json(self, kind: str, object_id: str, blob: bytes) -> dict:
+        if len(blob) < 13:
+            raise InfrastructureError("Encrypted state is malformed")
+        raw = open_sealed(self.key, blob[:12], blob[12:], aad=self._aad(kind, object_id))
+        return json.loads(raw.decode("utf-8"))
 
     def get_json(self, kind: str, object_id: str) -> dict | None:
         blob = self.backend.get(kind, object_id)
         if blob is None:
             return None
-        if len(blob) < 13:
-            raise InfrastructureError("Encrypted state is malformed")
-        raw = open_sealed(self.key, blob[:12], blob[12:], aad=self._aad(kind, object_id))
-        return json.loads(raw.decode("utf-8"))
+        return self._open_json(kind, object_id, blob)
+
+    def get_json_with_token(self, kind: str, object_id: str) -> tuple[dict | None, bytes | None]:
+        """Read an object together with an opaque version token for put_json_if."""
+        blob = self.backend.get(kind, object_id)
+        if blob is None:
+            return None, None
+        return self._open_json(kind, object_id, blob), blob
+
+    def put_json_if(
+        self, kind: str, object_id: str, value: dict, token: bytes, expires_at: float | None = None
+    ) -> bytes | None:
+        """Write only if the object is unchanged since `token` was read.
+
+        Returns the new version token on success, None if another writer won.
+        """
+        blob = self._seal_json(kind, object_id, value)
+        if self.backend.compare_and_put(kind, object_id, blob, token, expires_at):
+            return blob
+        return None
 
     def delete(self, kind: str, object_id: str) -> None:
         self.backend.delete(kind, object_id)
