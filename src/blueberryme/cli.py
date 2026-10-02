@@ -107,6 +107,19 @@ def serve(host: str = "127.0.0.1", port: int = 8787) -> None:
 
 
 @app.command()
+def keygen(path: Path = typer.Argument(..., help="Key file to create; keep it outside the state directory.")) -> None:
+    """Create a new 32-byte master key file (mode 0600)."""
+    from .keys import write_master_key_file
+
+    try:
+        written = write_master_key_file(path)
+    except FileExistsError as exc:
+        raise typer.BadParameter(f"{path} already exists; refusing to overwrite") from exc
+    typer.echo(f"Wrote master key to {written}")
+    typer.echo(f"Start the gateway with BBM_MASTER_KEY_FILE={written}")
+
+
+@app.command()
 def version() -> None:
     typer.echo("0.3.0")
 
