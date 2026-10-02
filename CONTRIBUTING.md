@@ -1,7 +1,13 @@
 # Contributing
 
-BlueberryMe v0.1 is in a licence-sensitive bootstrap phase.
+BlueberryMe is GPL-3.0-only and is intentionally kept compatible with a possible future dual-license model.
 
-External code contributions are not accepted yet. Issues, threat models, interoperability reports, test cases, and design feedback are welcome. A contributor licence agreement will be introduced before external source code is merged so that future dual/commercial licensing remains possible.
+For now:
 
-Do not include personal data, credentials, access tokens, production database values, or real case data in issues, fixtures, examples, screenshots, logs, or pull requests.
+- issues, threat models, test cases and design feedback are welcome;
+- do not submit real personal data, credentials or production identifiers;
+- third-party code contributions require an explicit contributor agreement before merge;
+- cryptographic changes require tests and a written security rationale;
+- privacy behavior must never introduce a fail-open fallback.
+
+A contribution that changes protocol semantics should update `docs/BBM-1.md`, tests and the changelog in the same change.

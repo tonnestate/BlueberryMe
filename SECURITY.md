@@ -1,30 +1,67 @@
-# Security policy
+# Security Policy and Threat Model
 
-## Trust boundary
+## Security objective
 
-BlueberryMe treats AI models, agent harnesses, MCP clients, and external tool consumers as untrusted unless an explicit policy grants a narrowly scoped capability.
+BlueberryMe aims to prevent AI agents from receiving direct identifiers, credentials or other values that are not required for their authorized task.
 
-## v0.1 security invariants
+## v0.2 security boundary
 
-1. Raw secrets must never be returned to the model-facing interface.
-2. Reversible identity tokens require an active, unexpired lease.
-3. Rehydration is denied if target, purpose, scope, data class, or lease state do not match policy.
-4. Lease keys exist only in volatile process memory in the reference runtime.
-5. Destroying a lease removes its key and capabilities from the runtime.
-6. Audit events must not contain raw protected values, resolved values, ciphertext tokens, or secrets.
-7. Unknown structured fields fail closed when strict mode is enabled.
-8. Logging of request/response payloads must remain disabled at the privacy boundary.
+Trusted boundary:
 
-## Known v0.1 limitations
+- BlueberryMe runtime;
+- source systems intentionally placed behind it;
+- configured policy;
+- lease key material.
 
-- Process memory is a trusted boundary. A privileged host compromise can read in-memory values.
-- Multi-node lease/key coordination is not implemented.
-- The built-in free-text detector cannot guarantee complete PII detection.
-- Quasi-identifier and inference-risk analysis is not yet automated.
-- Database proxy enforcement is not yet implemented; callers must route data through the runtime.
-- Secure hardware/KMS/HSM integration is not yet implemented.
-- Cryptographic erasure is best-effort in managed-language process memory; destruction means removal of the usable runtime key/reference, not a guarantee that every historical RAM copy has been physically overwritten.
+Untrusted for direct identity/secrets:
 
-## Production direction
+- LLM/model;
+- external agent harness;
+- model-generated text;
+- model-selected tool arguments until validated.
 
-Production profiles should use hardened process isolation, KMS/HSM-backed key lifecycle, network egress controls, signed policy, tenant isolation, non-payload observability, and an enforced gateway so agents cannot bypass BlueberryMe.
+## v0.2 hardening
+
+### Structured rehydration
+
+BlueberryMe does not perform find/replace de-tokenization in arbitrary model text. Rehydration accepts only a complete BBM reference in a declared structured field and checks target, operation, expected class, lease and class policy.
+
+### Safe data-quality degradation
+
+Malformed source data does not trigger a raw-data fallback. Default behavior suppresses malformed protected values and unknown fields.
+
+### Short-handle storage
+
+LLM-friendly short handles map to authenticated encrypted tokens, not plaintext identities.
+
+### Capability storage
+
+Capability secrets are stored as authenticated ciphertext under the active lease key, not as plaintext runtime dictionary values.
+
+### Lease destruction
+
+Lease destruction removes handle and capability state and overwrites the active Python `bytearray` key before dropping references.
+
+This is not a guarantee that every historical copy of key/plaintext bytes has been physically overwritten in a managed runtime.
+
+## Explicit non-goals in v0.2
+
+v0.2 does not claim protection against:
+
+- root/administrator compromise of the BlueberryMe host;
+- live process-memory scraping;
+- hardware/side-channel attacks;
+- complete quasi-identifier detection in arbitrary free text;
+- deliberate out-of-band raw database/API paths;
+- compromised source systems;
+- a transparent production MCP transport proxy (the v0.2 proxy core is transport-neutral).
+
+## Fail-open prohibition
+
+A privacy-control failure must never cause BlueberryMe to return the original protected value as a convenience fallback.
+
+Source-data quality and privacy-control integrity are separate failure domains.
+
+## Reporting
+
+Do not include real personal data, credentials or production tokens in public vulnerability reports or issue examples.

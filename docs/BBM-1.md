@@ -1,18 +1,18 @@
-# BBM/1 — Agent Privacy Protocol, draft 0.1
+# BBM/1 — Agent Privacy Protocol, draft 0.2
 
 Status: experimental reference specification.
 
 ## 1. Objective
 
-BBM/1 defines a vendor-neutral privacy contract between sensitive data sources and AI agents. It separates semantic task context from identity, secrets, authorization, and retention.
+BBM/1 defines a vendor-neutral privacy contract between sensitive data sources and AI agents. It separates semantic task context from identity, secrets, authorization, retention and re-identification capability.
 
-## 2. Threat model
+## 2. Trust model
 
-The agent/model/harness is considered untrusted for direct identifiers and secrets. The BlueberryMe privacy boundary is trusted to enforce policy before model ingress and before re-identification at egress.
+The agent/model/harness is untrusted for direct identifiers and credentials. The BlueberryMe privacy boundary must enforce policy **before model ingress** and **before re-identification at egress**.
 
-## 3. Required context
+## 3. Required privacy context
 
-A privacy lease MUST bind:
+A privacy lease binds at least:
 
 ```text
 agent_id
@@ -20,94 +20,157 @@ purpose
 scope
 lease_id
 expires_at
-allowed_rehydrate_targets
+allowed target operations
 ```
 
-A protected value MUST have a `data_class` and a transformation selected by policy.
+A protected value has a `data_class` and a policy transformation.
 
 ## 4. Transformations
 
-- `ALLOW`: value remains visible because policy explicitly permits it for the stated purpose.
-- `TOKENIZE`: reversible scoped pseudonym produced with authenticated deterministic encryption.
-- `GENERALIZE`: reduce precision, for example a date of birth to an age bucket.
-- `DENY`: remove the value from the model-facing representation.
+- `ALLOW`: visible because policy explicitly permits it for the purpose.
+- `TOKENIZE`: reversible scoped pseudonym.
+- `GENERALIZE`: reduced precision.
+- `DENY`: not exposed to the model.
 
-No field may implicitly default to `ALLOW` in strict structured-data mode.
+Unknown structured fields must never implicitly default to `ALLOW` in strict mode.
 
-## 5. Scoped reversible tokenization
+## 5. Data quality semantics
 
-v0.1 uses AES-SIV with a random 64-byte per-lease key. Associated data binds the ciphertext to BBM protocol version, data class, purpose, and scope.
+BBM/1 distinguishes source-data quality from privacy-control integrity.
 
-Properties:
+A compliant high-safety implementation should support field-level behavior for:
 
-- identical plaintext + identical data class inside one lease -> stable token;
-- the same plaintext under a different lease -> different token;
-- token decryption after lease destruction -> unavailable because the runtime key no longer exists;
-- no persistent plaintext-to-token lookup table is necessary.
+```text
+NULL
+EMPTY
+INVALID
+TRANSFORM_ERROR
+UNKNOWN_FIELD
+```
 
-Tokens have the wire form:
+The default high-safety behavior is:
+
+```text
+NULL             -> KEEP_NULL
+EMPTY            -> KEEP_EMPTY
+INVALID          -> SUPPRESS
+TRANSFORM_ERROR  -> SUPPRESS
+UNKNOWN_FIELD    -> SUPPRESS
+```
+
+A bad field must not require a whole workflow to fail if the field can be safely withheld.
+
+A privacy-control failure (missing policy, invalid lease, unauthorized target/operation, unauthenticated reference) must never degrade to raw-data exposure.
+
+Normative principle:
+
+> Never fail open. Degrade safely.
+
+## 6. Scoped reversible tokenization
+
+The reference runtime uses AES-SIV authenticated deterministic encryption with a random 64-byte per-lease key. Associated data binds ciphertext to:
+
+```text
+BBM protocol version
+data class
+purpose
+scope
+```
+
+Two representation modes are defined:
+
+### CRYPTO_TOKEN
 
 ```text
 BBM1.<DATA_CLASS>.<URLSAFE_BASE64_CIPHERTEXT>
 ```
 
-## 6. Rehydration
-
-Rehydration MUST fail unless all conditions hold:
+### LEASE_HANDLE
 
 ```text
-lease exists
-lease active
-lease not expired
-requested purpose matches lease purpose
-requested scope matches lease scope
-target is allow-listed
-data class is rehydratable by policy
-ciphertext authenticates under the lease key and associated data
+BBM1H.<DATA_CLASS>.<SHORT_OPAQUE_ID>
 ```
 
-The model itself SHOULD NOT be an allowed rehydration target for direct identifiers.
+A lease handle maps only to an authenticated crypto token, never directly to plaintext.
 
-## 7. Capability handles
+Properties:
 
-Secrets and credentials are not tokenized for model use. They are converted to opaque capability handles:
+- identical value + class within one lease -> stable reference;
+- a different lease -> different reference;
+- lease destruction removes short-handle state and the key;
+- no persistent plaintext person-to-token lookup is required.
+
+## 7. Structured rehydration
+
+Rehydration is a privileged operation, not a string transformation.
+
+A request must bind:
+
+```text
+complete BBM reference
+lease
+target
+operation
+expected data class
+```
+
+Rehydration must fail unless:
+
+```text
+lease exists and is active
+target is lease-authorized
+operation is lease-authorized
+reference is a complete BBM token/handle
+reference authenticates under the lease
+expected data class matches
+class policy authorizes target + operation
+```
+
+Implementations must not search arbitrary free text and replace embedded BBM tokens with plaintext.
+
+## 8. Capability handles
+
+Credentials and secrets are represented as opaque capability handles:
 
 ```text
 BBM1-CAP.<opaque-id>
 ```
 
-The runtime keeps the secret only for the active lease. Resolution requires an allowed target. The returned secret must be delivered directly to the target integration/process, not returned into model context.
+The reference runtime encrypts the underlying secret under the active lease key. Resolution requires the exact target + operation. Secret material must be delivered directly to the target integration/process and must not be returned to model context.
 
-## 8. Retention
+## 9. Retention
 
-Lease lifetime, source-data lifetime, audit lifetime, and external-provider retention are distinct concepts. BBM/1 governs the BlueberryMe runtime only.
+Source-data lifetime, privacy-lease lifetime, provider retention and audit lifetime are separate concepts.
 
-On lease destruction the implementation MUST remove:
+On lease destruction the runtime removes:
 
-- the lease encryption key;
-- active capability secrets;
-- temporary protected-context caches owned by the lease.
+- lease encryption key;
+- short privacy-handle state;
+- active capability state;
+- lease-owned temporary state.
 
-The audit trail MAY remain if it contains no protected payload.
+## 10. Audit and evidence
 
-## 9. Audit
-
-Audit events record control-plane facts only, for example:
+Audit/evidence may contain control-plane facts such as:
 
 ```text
 event_type
-lease_ref
-agent_ref
+pseudonymous lease/agent/scope refs
 purpose
-scope_ref
 data_class
-count
 decision
+count
 timestamp
+target
+operation
 ```
 
-Raw values, resolved values, token ciphertext, and credentials MUST NOT appear in the audit payload.
+Raw values, resolved values, ciphertext, tokens, handles and credentials must not be copied into normal audit payloads.
 
-## 10. Fail-closed behavior
+## 11. Proxy placement
 
-In strict structured-data mode, an unclassified field is denied rather than passed through. Detector uncertainty in free text must be surfaced to callers; free-text detection alone is not a compliance guarantee.
+A model-callable privacy tool is not sufficient as the only boundary. BlueberryMe should be placed so that sensitive upstream data is transformed before it enters agent/model context.
+
+Tool outputs: protect before returning to model.
+
+Tool inputs requiring real identity: resolve only at declared structured fields immediately before the authorized target operation.
