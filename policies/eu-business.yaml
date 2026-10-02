@@ -1,0 +1,37 @@
+version: BBM/1
+strict_structured_data: true
+
+default_action: DENY
+
+classes:
+  PERSON:
+    action: TOKENIZE
+    rehydrate_targets: ["LETTER_SERVICE", "SOURCE_SYSTEM"]
+  EMAIL:
+    action: TOKENIZE
+    rehydrate_targets: ["MAIL_DELIVERY"]
+  PHONE:
+    action: TOKENIZE
+    rehydrate_targets: ["TELEPHONY"]
+  ADDRESS:
+    action: TOKENIZE
+    rehydrate_targets: ["LETTER_SERVICE", "SOURCE_SYSTEM"]
+  CASE_ID:
+    action: TOKENIZE
+    rehydrate_targets: ["SOURCE_SYSTEM"]
+  BIRTH_DATE:
+    action: GENERALIZE
+    rehydrate_targets: []
+  IBAN:
+    action: DENY
+    rehydrate_targets: []
+  SECRET:
+    action: DENY
+    rehydrate_targets: []
+  HEALTH_DATA:
+    action: ALLOW
+    allowed_purposes: ["CLAIM_REVIEW"]
+    rehydrate_targets: []
+  PUBLIC:
+    action: ALLOW
+    rehydrate_targets: []
