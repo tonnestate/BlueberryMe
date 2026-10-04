@@ -1,4 +1,4 @@
-# Threat model — v0.3
+# Threat model — v0.3.1
 
 ## Primary assets
 
@@ -35,6 +35,42 @@
 
 **Control:** handle possession is insufficient; intents are signed, target/operation/payload/expiry-bound and tracked as consumed.
 
+### Concurrent replay (fixed in 0.3.1)
+
+**Threat:** several requests carrying the same intent race through "is it consumed?" before any of them marks it consumed; the target runs several times.
+
+**Control:** atomic first-writer-wins consumption before resolution, enforced by the shared state store (also across processes).
+
+### Double execution of async jobs (fixed in 0.3.1)
+
+**Threat:** two workers pick up the same queued job (e.g. a payment) and both execute it.
+
+**Control:** expiring atomic worker claim; re-read after claim; cancel during execution discards the result; the job id doubles as target idempotency key.
+
+### Self-minted authority (fixed in 0.3.1)
+
+**Threat:** an agent that can reach the gateway creates its own lease with arbitrary target operations, or asks for wider operations when collecting an async result.
+
+**Control:** separate control-plane and agent-plane credentials, fail-closed when unconfigured; agent identity from the credential; result leases are the intersection with the submitting lease.
+
+### Unsigned call attributes (fixed in 0.3.1)
+
+**Threat:** a guarded call object is modified between gateway and target (different field map, different lease id) so values are resolved differently or the response is tokenised into another agent's lease.
+
+**Control:** field map signed into the intent; response protection always uses the intent's lease; mismatches fail with `BBM_INTENT_INVALID`.
+
+### Echo laundering
+
+**Threat:** a target returns a resolved value inside a field the response schema allows (free text, logs, nested objects, keys).
+
+**Control:** echo guard replaces every resolved value in the response with the agent's handle (secrets with a removal marker). Not a detector for transformed/partial echoes.
+
+### Linkability inside a lease
+
+**Threat:** stable handles let an observer of one lease's context see that two records concern the same entity.
+
+**Control:** this is the intended trade-off for agent reasoning and is scoped to one lease; handles are random, the lookup index is HMAC-keyed and deleted with the lease. Classes where even in-lease linkage is unacceptable use `linkability: OCCURRENCE`.
+
 ### Value drift
 
 **Threat:** a source pointer resolves to a value that changed after submission.
@@ -43,9 +79,9 @@
 
 ### Exception leakage
 
-**Threat:** target exception contains IBAN/name/other input.
+**Threat:** target or source-adapter exception contains IBAN/name/connection strings/other input.
 
-**Control:** raw exception text is discarded; fixed error codes only.
+**Control:** raw exception text is discarded on both the target and the source-read path; fixed error codes only.
 
 ### Dirty data causing fail-open
 

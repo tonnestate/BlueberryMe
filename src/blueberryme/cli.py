@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import secrets
 from pathlib import Path
 
 import typer
@@ -11,7 +13,7 @@ from .proxy import StructuredToolGuard, TargetAdapter
 from .references import MemorySourceAdapter
 from .runtime import BlueberryRuntime
 
-app = typer.Typer(add_completion=False, help="BlueberryMe v0.3 reference runtime")
+app = typer.Typer(add_completion=False, help="BlueberryMe v0.3.1 reference runtime")
 
 
 def _policy_path() -> Path:
@@ -92,23 +94,37 @@ def demo() -> None:
         agent_id="unknown-external-agent",
         purpose="CLAIM_REVIEW",
         scope="CASE:4711:RESULT",
-        allowed_operations={"SOURCE_SYSTEM": ["LOOKUP"]},
     )
     typer.echo(f"ASYNC RESULT: {retrieved}")
 
 
 @app.command()
 def serve(host: str = "127.0.0.1", port: int = 8787) -> None:
+    """Run the HTTP gateway. Requires BBM_CONTROL_TOKEN and BBM_AGENT_TOKENS."""
     try:
         import uvicorn
     except ImportError as exc:
         raise typer.BadParameter("Install blueberryme[api] to run the gateway") from exc
+    if os.environ.get("BBM_INSECURE_DEV") == "1":
+        typer.echo("WARNING: BBM_INSECURE_DEV=1 - gateway authentication is DISABLED. Never use this outside a laptop.", err=True)
+    elif not os.environ.get("BBM_CONTROL_TOKEN") or not os.environ.get("BBM_AGENT_TOKENS"):
+        typer.echo(
+            "BBM_CONTROL_TOKEN and BBM_AGENT_TOKENS are not set: every request will be refused (503).\n"
+            "Generate tokens with 'blueberryme gen-token'.",
+            err=True,
+        )
     uvicorn.run("blueberryme.api:app", host=host, port=port, reload=False)
+
+
+@app.command("gen-token")
+def gen_token() -> None:
+    """Print a fresh random gateway token (control or agent)."""
+    typer.echo(secrets.token_urlsafe(32))
 
 
 @app.command()
 def version() -> None:
-    typer.echo("0.3.0")
+    typer.echo("0.3.1")
 
 
 if __name__ == "__main__":

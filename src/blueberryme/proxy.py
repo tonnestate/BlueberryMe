@@ -102,6 +102,8 @@ class StructuredToolGuard:
             handles=tuple(handles),
             payload=frozen,
             ttl_seconds=intent_ttl_seconds,
+            reference_fields=normalized_refs,
+            capability_fields=frozenset(capability_fields),
         )
         return GuardedCall(
             lease_id=lease_id,
@@ -138,8 +140,12 @@ class TargetAdapter:
     ) -> dict[str, Any]:
         if call.target != self.target_id:
             raise StructureDenied()
+        if call.lease_id != call.intent.lease_id or call.operation != call.intent.operation:
+            # Only signed fields are trusted. The response is always protected under the
+            # lease the intent was minted for, never under an unsigned call attribute.
+            return self._safe_error("BBM_INTENT_INVALID", retryable=False)
         try:
-            resolved = self.runtime.materialize_intent_payload(
+            resolved, echoes = self.runtime.materialize_for_target(
                 call.intent,
                 payload=deepcopy(call.payload),
                 target=self.target_id,
@@ -149,6 +155,9 @@ class TargetAdapter:
             )
         except BlueberryError as exc:
             return self._safe_error(exc.code.value, retryable=exc.failure_class.value == "INFRASTRUCTURE")
+        except Exception:
+            # A broken source adapter must not leak connection strings or values either.
+            return self._safe_error("BBM_SOURCE_UNAVAILABLE", retryable=True)
 
         try:
             result = handler(resolved)
@@ -165,5 +174,8 @@ class TargetAdapter:
         if response_schema is None:
             # A model-visible structured result must have an explicit privacy schema.
             return self._safe_error("BBM_RESPONSE_SCHEMA_REQUIRED", retryable=False)
-        protected = self.runtime.protect_record(result, response_schema, call.lease_id)
+        try:
+            protected = self.runtime.protect_response(result, response_schema, call.intent.lease_id, echoes)
+        except BlueberryError as exc:
+            return self._safe_error(exc.code.value, retryable=exc.failure_class.value == "INFRASTRUCTURE")
         return {"ok": True, "result": protected}

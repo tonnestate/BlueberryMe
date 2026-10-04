@@ -30,6 +30,19 @@ class TokenMode(StrEnum):
     LEASE_HANDLE = "LEASE_HANDLE"
 
 
+class Linkability(StrEnum):
+    """Whether repeated occurrences of one value share a handle.
+
+    LEASE: same value (or same source pointer) -> same handle inside one lease, so the
+    agent can reason about "the same customer" across records. Different leases stay
+    unlinkable. OCCURRENCE: every occurrence gets a fresh handle (maximum unlinkability,
+    weaker agent reasoning).
+    """
+
+    LEASE = "LEASE"
+    OCCURRENCE = "OCCURRENCE"
+
+
 class QualityAction(StrEnum):
     KEEP_NULL = "KEEP_NULL"
     KEEP_EMPTY = "KEEP_EMPTY"
@@ -75,6 +88,7 @@ class QualityPolicy:
 class ClassPolicy:
     action: Transform
     token_mode: TokenMode = TokenMode.LEASE_HANDLE
+    linkability: Linkability = Linkability.LEASE
     rehydrate: dict[str, frozenset[str]] = field(default_factory=dict)
     allowed_purposes: frozenset[str] = frozenset()
     quality: QualityPolicy = QualityPolicy()
@@ -97,8 +111,6 @@ class Lease:
     expires_at: datetime
     allowed_operations: dict[str, frozenset[str]]
     revoked: bool = False
-    handles: set[str] = field(default_factory=set)
-    reference_ids: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -134,6 +146,9 @@ class ResolutionIntent:
     policy_version: str
     expires_at: str
     signature: str
+    # Hash of the declared field -> data-class map. Binds *how* the payload may be
+    # resolved, not only *what* the payload is.
+    fields_hash: str = ""
 
 
 @dataclass(frozen=True)

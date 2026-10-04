@@ -2,7 +2,7 @@
 
 from .async_runtime import AsyncPrivacyPipeline, AsyncProviderRegistry
 from .jobs import AsyncJobGateway
-from .models import DataClass, FailureClass, QualityAction, SourceReference, Transform
+from .models import DataClass, FailureClass, Linkability, QualityAction, SourceReference, Transform
 from .proxy import StructuredToolGuard, TargetAdapter
 from .references import CallbackSourceAdapter, MemorySourceAdapter
 from .runtime import BlueberryRuntime
@@ -22,7 +22,8 @@ __all__ = [
     "SourceReference",
     "DataClass",
     "Transform",
+    "Linkability",
     "QualityAction",
     "FailureClass",
 ]
-__version__ = "0.3.0"
+__version__ = "0.3.1"

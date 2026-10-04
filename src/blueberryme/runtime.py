@@ -5,11 +5,13 @@ import hmac
 import secrets
 import threading
 from collections import Counter
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
-from .crypto import CAPABILITY_RE, HANDLE_RE, CryptoError, parse_handle, random_capability_handle, random_handle
+from .crypto import CAPABILITY_RE, HANDLE_RE, CryptoError, canonical_json, parse_handle, random_capability_handle, random_handle
 from .detectors import Finding, RegexDetector
 from .errors import (
     BlueberryError,
@@ -28,6 +30,7 @@ from .models import (
     GuardedCall,
     HandleEntry,
     Lease,
+    Linkability,
     QualityAction,
     ReferenceKind,
     ResolutionIntent,
@@ -41,9 +44,23 @@ from .validators import is_valid
 
 _SUPPRESSED = object()
 
+# Shorter resolved values are only replaced when they are a complete string leaf.
+# Substring replacement of e.g. "42" would corrupt unrelated response text.
+ECHO_MIN_SUBSTRING = 4
+SECRET_REMOVED = "[BBM:SECRET:REMOVED]"
+
+
+@dataclass(frozen=True)
+class EchoValue:
+    """A value resolved inside the trusted path, plus what replaces it on the way back."""
+
+    value: Any
+    data_class: DataClass
+    replacement: str
+
 
 class BlueberryRuntime:
-    """BBM/1 v0.3 reference runtime.
+    """BBM/1 reference runtime.
 
     The agent sees random lease-local handles only. Sensitive values and encrypted
     references remain inside the BlueberryMe boundary. There is intentionally no
@@ -52,6 +69,7 @@ class BlueberryRuntime:
 
     LEASE_KIND = "lease"
     HANDLE_KIND = "handle"
+    INDEX_KIND = "handle-index"
     REVOCATION_KIND = "revoked-purpose"
 
     def __init__(
@@ -89,6 +107,7 @@ class BlueberryRuntime:
         self._intent_authority = IntentAuthority(self._keys["intent"], self._backend)
         self._metrics: Counter[str] = Counter()
         self._lock = threading.RLock()
+        self._audit_local = threading.local()
 
     @classmethod
     def persistent(
@@ -112,6 +131,8 @@ class BlueberryRuntime:
     def register_source(self, source_id: str, adapter: SourceAdapter) -> None:
         self._sources.register(source_id, adapter)
 
+    # ------------------------------------------------------------------ purpose
+
     @staticmethod
     def _purpose_key(tenant_id: str, purpose: str) -> str:
         return hashlib.sha256(f"{tenant_id}\x00{purpose}".encode("utf-8")).hexdigest()
@@ -125,6 +146,8 @@ class BlueberryRuntime:
 
     def purpose_active(self, tenant_id: str, purpose: str) -> bool:
         return self._state.get_json(self.REVOCATION_KIND, self._purpose_key(tenant_id, purpose)) is None
+
+    # -------------------------------------------------------------------- audit
 
     @staticmethod
     def _retention_epoch() -> str:
@@ -140,6 +163,25 @@ class BlueberryRuntime:
         ).digest()
         return hmac.new(scoped, value.encode("utf-8"), hashlib.sha256).hexdigest()[:20]
 
+    @contextmanager
+    def _audit_batch(self) -> Iterator[None]:
+        """Aggregate per-value audit events of one call into one row per decision.
+
+        Per-value rows do not add accountability (they carry no payload anyway) but
+        dominate write volume on large batches.
+        """
+        if getattr(self._audit_local, "buffer", None) is not None:
+            yield
+            return
+        self._audit_local.buffer = {}
+        try:
+            yield
+        finally:
+            buffer: dict[tuple, list] = self._audit_local.buffer
+            self._audit_local.buffer = None
+            for (event_type, _lease_id, data_class, decision), (lease, count) in buffer.items():
+                self._write_audit(event_type, lease, data_class=data_class, decision=decision, count=count, metadata={})
+
     def _audit_event(
         self,
         event_type: str,
@@ -154,6 +196,24 @@ class BlueberryRuntime:
         forbidden = {"value", "raw", "plaintext", "ciphertext", "token", "secret", "resolved", "payload", "handle"}
         if forbidden.intersection(k.lower() for k in safe_metadata):
             raise BlueberryError("Sensitive audit metadata key rejected")
+        buffer = getattr(self._audit_local, "buffer", None)
+        if buffer is not None and not safe_metadata:
+            key = (event_type, lease.lease_id, data_class, decision)
+            slot = buffer.setdefault(key, [lease, 0])
+            slot[1] += count
+            return
+        self._write_audit(event_type, lease, data_class=data_class, decision=decision, count=count, metadata=safe_metadata)
+
+    def _write_audit(
+        self,
+        event_type: str,
+        lease: Lease,
+        *,
+        data_class: DataClass | None,
+        decision: str | None,
+        count: int,
+        metadata: dict[str, Any],
+    ) -> None:
         event = AuditEvent(
             timestamp=datetime.now(UTC).isoformat(),
             event_type=event_type,
@@ -165,10 +225,18 @@ class BlueberryRuntime:
             data_class=data_class.value if data_class else None,
             decision=decision,
             count=count,
-            metadata=safe_metadata,
+            metadata=metadata,
         )
         self._backend.append_audit(event.__dict__)
         self._metrics[f"{event_type}:{decision or 'NONE'}"] += count
+
+    @contextmanager
+    def _unit_of_work(self) -> Iterator[None]:
+        """One atomic state transaction with aggregated audit for one public call."""
+        with self._state.transaction(), self._audit_batch():
+            yield
+
+    # ------------------------------------------------------------------- leases
 
     @staticmethod
     def _normalise_operations(allowed_operations: Mapping[str, Sequence[str]] | None) -> dict[str, frozenset[str]]:
@@ -188,12 +256,11 @@ class BlueberryRuntime:
             "expires_at": lease.expires_at.isoformat(),
             "allowed_operations": {k: sorted(v) for k, v in lease.allowed_operations.items()},
             "revoked": lease.revoked,
-            "handles": sorted(lease.handles),
-            "reference_ids": sorted(lease.reference_ids),
         }
 
     @staticmethod
     def _lease_from_json(item: dict[str, Any]) -> Lease:
+        # v0.3.0 leases also carried "handles"/"reference_ids" lists; they are ignored.
         return Lease(
             lease_id=str(item["lease_id"]),
             tenant_id=str(item["tenant_id"]),
@@ -203,11 +270,11 @@ class BlueberryRuntime:
             expires_at=datetime.fromisoformat(str(item["expires_at"])),
             allowed_operations={str(k): frozenset(str(x) for x in v) for k, v in item["allowed_operations"].items()},
             revoked=bool(item.get("revoked", False)),
-            handles=set(str(x) for x in item.get("handles", [])),
-            reference_ids=set(str(x) for x in item.get("reference_ids", [])),
         )
 
     def _save_lease(self, lease: Lease) -> None:
+        # The lease record itself is not owned by the lease: it must survive destruction
+        # as a tombstone so a destroyed lease id reports LEASE_REVOKED, not UNKNOWN.
         self._state.put_json(self.LEASE_KIND, lease.lease_id, self._lease_to_json(lease))
 
     def _load_lease(self, lease_id: str) -> Lease | None:
@@ -244,6 +311,16 @@ class BlueberryRuntime:
             self._audit_event("LEASE_CREATED", lease, decision="ALLOW")
         return lease.lease_id
 
+    def lease_owner(self, lease_id: str) -> tuple[str, str]:
+        """(tenant_id, agent_id) of an active lease, for gateway identity checks."""
+        lease = self._active_lease(lease_id)
+        return lease.tenant_id, lease.agent_id
+
+    def lease_operations(self, lease_id: str) -> dict[str, list[str]]:
+        """Allowed target operations of an active lease (trusted-side helper)."""
+        lease = self._active_lease(lease_id)
+        return {k: sorted(v) for k, v in lease.allowed_operations.items()}
+
     def _active_lease(self, lease_id: str) -> Lease:
         with self._lock:
             lease = self._load_lease(lease_id)
@@ -262,6 +339,8 @@ class BlueberryRuntime:
     def _operation_allowed(lease: Lease, target: str, operation: str) -> bool:
         allowed = lease.allowed_operations.get(target, frozenset())
         return operation in allowed or "*" in allowed
+
+    # ------------------------------------------------------------------ handles
 
     @staticmethod
     def _entry_to_json(entry: HandleEntry) -> dict[str, Any]:
@@ -293,6 +372,33 @@ class BlueberryRuntime:
         item = self._state.get_json(self.HANDLE_KIND, handle)
         return None if item is None else self._entry_from_json(item)
 
+    def _index_id(self, lease: Lease, *, kind: ReferenceKind, data_class: DataClass, origin_scope: str, material: Any) -> str:
+        """Keyed, lease-scoped lookup id for "have we already issued a handle for this?".
+
+        HMAC under a dedicated subkey: without the master key the index ids reveal
+        nothing, and the same value in two leases yields unrelated ids.
+        """
+        if isinstance(material, bytes):
+            encoded = b"b:" + material
+        elif isinstance(material, str):
+            encoded = b"s:" + material.encode("utf-8")
+        else:
+            encoded = b"j:" + canonical_json(material)
+        header = canonical_json(
+            {"lease": lease.lease_id, "kind": kind.value, "class": data_class.value, "origin": origin_scope}
+        )
+        return hmac.new(self._keys["index"], header + b"\x00" + encoded, hashlib.sha256).hexdigest()
+
+    def _lookup_index(self, index_id: str, lease: Lease) -> str | None:
+        item = self._state.get_json(self.INDEX_KIND, index_id)
+        if item is None:
+            return None
+        handle = str(item["handle"])
+        entry = self._load_entry(handle)
+        if entry is None or entry.lease_id != lease.lease_id:
+            return None
+        return handle
+
     def _new_handle(
         self,
         *,
@@ -320,14 +426,21 @@ class BlueberryRuntime:
             target=target,
             operation=operation,
         )
-        self._state.put_json(self.HANDLE_KIND, handle, self._entry_to_json(entry), expires_at=lease.expires_at.timestamp())
-        lease.handles.add(handle)
-        lease.reference_ids.add(reference_id)
-        self._save_lease(lease)
+        self._state.put_json(
+            self.HANDLE_KIND,
+            handle,
+            self._entry_to_json(entry),
+            expires_at=lease.expires_at.timestamp(),
+            owner=lease.lease_id,
+        )
         return handle
 
-    def _new_reference_id(self) -> str:
+    @staticmethod
+    def _new_reference_id() -> str:
         return "BBM1-REF-" + secrets.token_urlsafe(18)
+
+    def _linkable(self, data_class: DataClass, lease: Lease) -> bool:
+        return self.policy.for_class(data_class, lease.purpose).linkability is Linkability.LEASE
 
     def _store_capsule(
         self,
@@ -340,6 +453,14 @@ class BlueberryRuntime:
         operation: str | None = None,
         origin_scope: str | None = None,
     ) -> str:
+        index_id: str | None = None
+        if kind is ReferenceKind.CAPSULE and self._linkable(data_class, lease):
+            index_id = self._index_id(
+                lease, kind=kind, data_class=data_class, origin_scope=origin_scope or lease.scope, material=value
+            )
+            existing = self._lookup_index(index_id, lease)
+            if existing is not None:
+                return existing
         reference_id = self._new_reference_id()
         self._references.put_capsule(
             reference_id,
@@ -348,8 +469,9 @@ class BlueberryRuntime:
             data_class=data_class,
             kind=kind,
             expires_at=lease.expires_at.timestamp(),
+            owner=lease.lease_id,
         )
-        return self._new_handle(
+        handle = self._new_handle(
             lease=lease,
             data_class=data_class,
             reference_id=reference_id,
@@ -358,6 +480,11 @@ class BlueberryRuntime:
             target=target,
             operation=operation,
         )
+        if index_id is not None:
+            self._state.put_json(
+                self.INDEX_KIND, index_id, {"handle": handle}, expires_at=lease.expires_at.timestamp(), owner=lease.lease_id
+            )
+        return handle
 
     def _store_source_reference(
         self,
@@ -367,6 +494,25 @@ class BlueberryRuntime:
         data_class: DataClass,
         origin_scope: str | None = None,
     ) -> str:
+        index_id: str | None = None
+        if self._linkable(data_class, lease):
+            # Same pointer -> same handle. Two different records that happen to hold the
+            # same value stay distinct: the pointer, not the value, is the identity.
+            index_id = self._index_id(
+                lease,
+                kind=ReferenceKind.SOURCE,
+                data_class=data_class,
+                origin_scope=origin_scope or lease.scope,
+                material={
+                    "source_id": reference.source_id,
+                    "record_key": reference.record_key,
+                    "field": reference.field,
+                    "row_version": reference.row_version,
+                },
+            )
+            existing = self._lookup_index(index_id, lease)
+            if existing is not None:
+                return existing
         reference_id = self._new_reference_id()
         self._references.put_source(
             reference_id,
@@ -374,14 +520,22 @@ class BlueberryRuntime:
             lease_id=lease.lease_id,
             data_class=data_class,
             expires_at=lease.expires_at.timestamp(),
+            owner=lease.lease_id,
         )
-        return self._new_handle(
+        handle = self._new_handle(
             lease=lease,
             data_class=data_class,
             reference_id=reference_id,
             kind=ReferenceKind.SOURCE,
             origin_scope=origin_scope,
         )
+        if index_id is not None:
+            self._state.put_json(
+                self.INDEX_KIND, index_id, {"handle": handle}, expires_at=lease.expires_at.timestamp(), owner=lease.lease_id
+            )
+        return handle
+
+    # --------------------------------------------------------------- protection
 
     def _protect_without_validation(self, value: Any, data_class: DataClass, lease: Lease) -> Any:
         rule = self.policy.for_class(data_class, lease.purpose)
@@ -421,18 +575,13 @@ class BlueberryRuntime:
 
     def protect_value(self, value: Any, data_class: DataClass, lease_id: str) -> Any:
         lease = self._active_lease(lease_id)
-        protected = self._protect_without_validation(value, data_class, lease)
+        with self._unit_of_work():
+            protected = self._protect_without_validation(value, data_class, lease)
         return None if protected is _SUPPRESSED else protected
 
-    def protect_source_reference(
-        self,
-        reference: SourceReference,
-        data_class: DataClass,
-        lease_id: str,
-        *,
-        origin_scope: str | None = None,
+    def _protect_source_locked(
+        self, reference: SourceReference, data_class: DataClass, lease: Lease, origin_scope: str | None
     ) -> Any:
-        lease = self._active_lease(lease_id)
         rule = self.policy.for_class(data_class, lease.purpose)
         if rule.action is Transform.ALLOW:
             value = self._sources.read(reference, enforce_version=True)
@@ -447,8 +596,19 @@ class BlueberryRuntime:
             return handle
         raise PolicyDenied("Unsupported source transformation")
 
-    def _protect_field(self, value: Any, data_class: DataClass, lease_id: str) -> Any:
+    def protect_source_reference(
+        self,
+        reference: SourceReference,
+        data_class: DataClass,
+        lease_id: str,
+        *,
+        origin_scope: str | None = None,
+    ) -> Any:
         lease = self._active_lease(lease_id)
+        with self._unit_of_work():
+            return self._protect_source_locked(reference, data_class, lease, origin_scope)
+
+    def _protect_field(self, value: Any, data_class: DataClass, lease: Lease) -> Any:
         rule = self.policy.for_class(data_class, lease.purpose)
         quality = rule.quality
         if value is None:
@@ -479,20 +639,16 @@ class BlueberryRuntime:
                 reason="TRANSFORM_ERROR",
             )
 
-    def protect_record(
-        self,
-        record: Mapping[str, Any],
-        schema: Mapping[str, DataClass | str],
-        lease_id: str,
+    def _protect_record_locked(
+        self, record: Mapping[str, Any], schema: Mapping[str, DataClass | str], lease: Lease
     ) -> dict[str, Any]:
-        lease = self._active_lease(lease_id)
         output: dict[str, Any] = {}
         for field, value in record.items():
             declared = schema.get(field)
             if declared is None:
                 action = self.policy.unknown_field_action
                 if action is QualityAction.PROTECT:
-                    protected = self._protect_field(value, DataClass.UNKNOWN, lease_id)
+                    protected = self._protect_field(value, DataClass.UNKNOWN, lease)
                     if protected is not _SUPPRESSED:
                         output[field] = protected
                     self._audit_event("FIELD", lease, data_class=DataClass.UNKNOWN, decision="PROTECT_UNCLASSIFIED")
@@ -508,13 +664,23 @@ class BlueberryRuntime:
             except ValueError as exc:
                 raise PolicyDenied("Unknown data class in schema") from exc
             try:
-                protected = self._protect_field(value, data_class, lease_id)
+                protected = self._protect_field(value, data_class, lease)
             except DataQualityError:
                 self._audit_event("FIELD", lease, data_class=data_class, decision="SUPPRESS_QUALITY_ERROR")
                 continue
             if protected is not _SUPPRESSED:
                 output[field] = protected
         return output
+
+    def protect_record(
+        self,
+        record: Mapping[str, Any],
+        schema: Mapping[str, DataClass | str],
+        lease_id: str,
+    ) -> dict[str, Any]:
+        lease = self._active_lease(lease_id)
+        with self._unit_of_work():
+            return self._protect_record_locked(record, schema, lease)
 
     def protect_reference_record(
         self,
@@ -526,14 +692,21 @@ class BlueberryRuntime:
     ) -> dict[str, Any]:
         lease = self._active_lease(lease_id)
         output: dict[str, Any] = {}
-        for field, reference in record.items():
-            declared = schema.get(field)
-            data_class = DataClass.UNKNOWN if declared is None else (declared if isinstance(declared, DataClass) else DataClass(declared))
-            protected = self.protect_source_reference(reference, data_class, lease_id, origin_scope=origin_scope)
-            if protected is not None:
-                output[field] = protected
-            if declared is None:
-                self._audit_event("FIELD", lease, data_class=DataClass.UNKNOWN, decision="PROTECT_UNCLASSIFIED_REFERENCE")
+        with self._unit_of_work():
+            for field, reference in record.items():
+                declared = schema.get(field)
+                data_class = (
+                    DataClass.UNKNOWN
+                    if declared is None
+                    else (declared if isinstance(declared, DataClass) else DataClass(declared))
+                )
+                protected = self._protect_source_locked(reference, data_class, lease, origin_scope)
+                if protected is not None:
+                    output[field] = protected
+                if declared is None:
+                    self._audit_event(
+                        "FIELD", lease, data_class=DataClass.UNKNOWN, decision="PROTECT_UNCLASSIFIED_REFERENCE"
+                    )
         return output
 
     def protect_batch(
@@ -545,12 +718,13 @@ class BlueberryRuntime:
         lease = self._active_lease(lease_id)
         protected_records: list[dict[str, Any]] = []
         quarantined_indexes: list[int] = []
-        for index, record in enumerate(records):
-            if not isinstance(record, Mapping):
-                quarantined_indexes.append(index)
-                self._audit_event("RECORD", lease, decision="QUARANTINE_STRUCTURE")
-                continue
-            protected_records.append(self.protect_record(record, schema, lease_id))
+        with self._unit_of_work():
+            for index, record in enumerate(records):
+                if not isinstance(record, Mapping):
+                    quarantined_indexes.append(index)
+                    self._audit_event("RECORD", lease, decision="QUARANTINE_STRUCTURE")
+                    continue
+                protected_records.append(self._protect_record_locked(record, schema, lease))
         return {
             "records": protected_records,
             "input_count": len(records),
@@ -578,14 +752,17 @@ class BlueberryRuntime:
             cursor = finding.end
         parts: list[str] = []
         cursor = 0
-        for finding in chosen:
-            parts.append(text[cursor : finding.start])
-            raw = text[finding.start : finding.end]
-            protected = self.protect_value(raw, finding.data_class, lease_id)
-            parts.append(str(protected) if protected is not None else f"[BBM:{finding.data_class.value}:REMOVED]")
-            cursor = finding.end
-        parts.append(text[cursor:])
-        self._audit_event("TEXT_SCAN", lease, decision="PROTECTED", count=len(chosen))
+        with self._unit_of_work():
+            for finding in chosen:
+                parts.append(text[cursor : finding.start])
+                raw = text[finding.start : finding.end]
+                protected = self._protect_without_validation(raw, finding.data_class, lease)
+                parts.append(
+                    str(protected) if protected is not _SUPPRESSED else f"[BBM:{finding.data_class.value}:REMOVED]"
+                )
+                cursor = finding.end
+            parts.append(text[cursor:])
+            self._audit_event("TEXT_SCAN", lease, decision="PROTECTED", count=len(chosen))
         return "".join(parts)
 
     def create_capability(
@@ -600,21 +777,24 @@ class BlueberryRuntime:
         lease = self._active_lease(lease_id)
         if not self._operation_allowed(lease, target, operation):
             raise CapabilityDenied("Capability operation denied")
-        handle = self._store_capsule(
-            secret,
-            lease=lease,
-            data_class=DataClass.SECRET,
-            kind=ReferenceKind.CAPABILITY,
-            target=target,
-            operation=operation,
-        )
-        self._audit_event(
-            "CAPABILITY_CREATE",
-            lease,
-            decision="ALLOW",
-            metadata={"kind": kind, "target": target, "operation": operation},
-        )
+        with self._unit_of_work():
+            handle = self._store_capsule(
+                secret,
+                lease=lease,
+                data_class=DataClass.SECRET,
+                kind=ReferenceKind.CAPABILITY,
+                target=target,
+                operation=operation,
+            )
+            self._audit_event(
+                "CAPABILITY_CREATE",
+                lease,
+                decision="ALLOW",
+                metadata={"kind": kind, "target": target, "operation": operation},
+            )
         return handle
+
+    # --------------------------------------------------------------- resolution
 
     def _entry_for_handle(self, handle: str, lease: Lease) -> HandleEntry:
         entry = self._load_entry(handle)
@@ -622,17 +802,18 @@ class BlueberryRuntime:
             raise RehydrationError()
         return entry
 
-    def validate_handle_for_call(
+    def _validate_handle(
         self,
         reference: str,
-        lease_id: str,
+        lease: Lease,
         *,
         expected_class: DataClass | None,
         target: str,
         operation: str,
         capability: bool = False,
     ) -> HandleEntry:
-        lease = self._active_lease(lease_id)
+        if not isinstance(reference, str):
+            raise RehydrationError()
         if capability:
             if not CAPABILITY_RE.fullmatch(reference):
                 raise RehydrationError()
@@ -668,6 +849,21 @@ class BlueberryRuntime:
             raise PolicyDenied(code=ErrorCode.TARGET_DENIED)
         return entry
 
+    def validate_handle_for_call(
+        self,
+        reference: str,
+        lease_id: str,
+        *,
+        expected_class: DataClass | None,
+        target: str,
+        operation: str,
+        capability: bool = False,
+    ) -> HandleEntry:
+        lease = self._active_lease(lease_id)
+        return self._validate_handle(
+            reference, lease, expected_class=expected_class, target=target, operation=operation, capability=capability
+        )
+
     def mint_resolution_intent(
         self,
         *,
@@ -677,6 +873,8 @@ class BlueberryRuntime:
         handles: tuple[str, ...],
         payload: dict[str, Any],
         ttl_seconds: int = 30,
+        reference_fields: Mapping[str, DataClass] | None = None,
+        capability_fields: frozenset[str] | set[str] | None = None,
     ) -> ResolutionIntent:
         lease = self._active_lease(lease_id)
         return self._intent_authority.mint(
@@ -687,7 +885,101 @@ class BlueberryRuntime:
             payload=payload,
             policy_version=self.policy.version,
             ttl_seconds=ttl_seconds,
+            fields_hash=IntentAuthority.fields_hash(
+                {k: DataClass(v).value for k, v in (reference_fields or {}).items()}, capability_fields or ()
+            ),
         )
+
+    def _validated_entries(
+        self,
+        intent: ResolutionIntent,
+        *,
+        lease: Lease,
+        payload: Mapping[str, Any],
+        target: str,
+        operation: str,
+        reference_fields: Mapping[str, DataClass],
+        capability_fields: frozenset[str],
+    ) -> list[tuple[str, HandleEntry]]:
+        """All checks for a resolution, without resolving anything yet."""
+        if intent.lease_id != lease.lease_id:
+            raise RehydrationError(code=ErrorCode.INTENT_INVALID)
+        self._intent_authority.validate(
+            intent,
+            payload=dict(payload),
+            target=target,
+            operation=operation,
+            fields_hash=IntentAuthority.fields_hash(
+                {k: DataClass(v).value for k, v in reference_fields.items()}, capability_fields
+            ),
+        )
+        entries: list[tuple[str, HandleEntry]] = []
+        for field, data_class in reference_fields.items():
+            if field not in payload:
+                raise RehydrationError()
+            entries.append(
+                (
+                    field,
+                    self._validate_handle(
+                        payload[field], lease, expected_class=data_class, target=target, operation=operation
+                    ),
+                )
+            )
+        for field in capability_fields:
+            if field not in payload:
+                raise RehydrationError()
+            entries.append(
+                (
+                    field,
+                    self._validate_handle(
+                        payload[field], lease, expected_class=None, target=target, operation=operation, capability=True
+                    ),
+                )
+            )
+        return entries
+
+    def materialize_for_target(
+        self,
+        intent: ResolutionIntent,
+        *,
+        payload: dict[str, Any],
+        target: str,
+        operation: str,
+        reference_fields: Mapping[str, DataClass],
+        capability_fields: frozenset[str],
+    ) -> tuple[dict[str, Any], list[EchoValue]]:
+        """Trusted target-side pull resolution. Not exposed as a model/API decode endpoint.
+
+        Order matters: validate everything, then atomically burn the intent, then
+        resolve. Two racing calls with one intent cannot both reach the target.
+        Returns the resolved payload plus the echo list for the response guard.
+        """
+        lease = self._active_lease(intent.lease_id)
+        entries = self._validated_entries(
+            intent,
+            lease=lease,
+            payload=payload,
+            target=target,
+            operation=operation,
+            reference_fields=reference_fields,
+            capability_fields=capability_fields,
+        )
+        self._intent_authority.consume_or_reject(intent.intent_id)
+        output = dict(payload)
+        echoes: list[EchoValue] = []
+        for field, entry in entries:
+            handle = output[field]
+            value = self._references.resolve_value(entry.reference_id, lease_id=lease.lease_id, sources=self._sources)
+            output[field] = value
+            echoes.append(
+                EchoValue(
+                    value=value,
+                    data_class=entry.data_class,
+                    replacement=handle if entry.kind is not ReferenceKind.CAPABILITY else SECRET_REMOVED,
+                )
+            )
+        self._audit_event("RESOLUTION", lease, decision="ALLOW", metadata={"target": target, "operation": operation})
+        return output, echoes
 
     def materialize_intent_payload(
         self,
@@ -699,49 +991,141 @@ class BlueberryRuntime:
         reference_fields: Mapping[str, DataClass],
         capability_fields: frozenset[str],
     ) -> dict[str, Any]:
-        """Trusted target-side pull resolution. Not exposed as a model/API decode endpoint."""
-        lease = self._active_lease(intent.lease_id)
-        self._intent_authority.validate(intent, payload=payload, target=target, operation=operation)
-        output = dict(payload)
-        for field, data_class in reference_fields.items():
-            handle = output[field]
-            entry = self.validate_handle_for_call(
-                handle,
-                lease.lease_id,
-                expected_class=data_class,
-                target=target,
-                operation=operation,
-            )
-            output[field] = self._references.resolve_value(entry.reference_id, lease_id=lease.lease_id, sources=self._sources)
-        for field in capability_fields:
-            handle = output[field]
-            entry = self.validate_handle_for_call(
-                handle,
-                lease.lease_id,
-                expected_class=None,
-                target=target,
-                operation=operation,
-                capability=True,
-            )
-            output[field] = self._references.resolve_value(entry.reference_id, lease_id=lease.lease_id, sources=self._sources)
-        self._intent_authority.consume(intent.intent_id)
-        self._audit_event("RESOLUTION", lease, decision="ALLOW", metadata={"target": target, "operation": operation})
-        return output
+        """Backwards-compatible wrapper around :meth:`materialize_for_target`."""
+        resolved, _ = self.materialize_for_target(
+            intent,
+            payload=payload,
+            target=target,
+            operation=operation,
+            reference_fields=reference_fields,
+            capability_fields=capability_fields,
+        )
+        return resolved
+
+    # ------------------------------------------------------------ return path
+
+    @staticmethod
+    def scrub_echoes(obj: Any, echoes: Sequence[EchoValue], replacement_for: Callable[[EchoValue], str] | None = None) -> Any:
+        """Remove resolved plaintext that a target echoes back in any response leaf.
+
+        Response schemas classify *fields*; a target can still return a resolved name
+        inside an ALLOW/PUBLIC free-text field ("Letter sent to Max Mustermann"). This
+        deterministic pass replaces every occurrence with the handle the agent already
+        holds (or a removal marker for secrets). It is a second line, not a substitute
+        for a correct response schema.
+        """
+        pairs: list[tuple[str, EchoValue]] = []
+        exact_bytes: list[tuple[bytes, EchoValue]] = []
+        for echo in echoes:
+            if isinstance(echo.value, bytes):
+                exact_bytes.append((echo.value, echo))
+                try:
+                    text = echo.value.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+            elif isinstance(echo.value, str):
+                text = echo.value
+            elif isinstance(echo.value, (int, float)) and not isinstance(echo.value, bool):
+                text = str(echo.value)
+            else:
+                continue
+            if text.strip():
+                pairs.append((text, echo))
+        if not pairs and not exact_bytes:
+            return obj
+        # Longest first, so "Max Mustermann" wins over a resolved "Max".
+        pairs.sort(key=lambda p: len(p[0]), reverse=True)
+        cache: dict[int, str] = {}
+
+        def repl(echo: EchoValue) -> str:
+            key = id(echo)
+            if key not in cache:
+                cache[key] = replacement_for(echo) if replacement_for is not None else echo.replacement
+            return cache[key]
+
+        def scrub_str(text: str) -> str:
+            for plain, echo in pairs:
+                if text == plain:
+                    return repl(echo)
+            out = text
+            for plain, echo in pairs:
+                if len(plain) >= ECHO_MIN_SUBSTRING and plain in out:
+                    out = out.replace(plain, repl(echo))
+            return out
+
+        def walk(value: Any) -> Any:
+            if isinstance(value, str):
+                return scrub_str(value)
+            if isinstance(value, bytes):
+                for raw, echo in exact_bytes:
+                    if value == raw:
+                        return repl(echo)
+                return value
+            if isinstance(value, Mapping):
+                return {(scrub_str(k) if isinstance(k, str) else k): walk(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [walk(v) for v in value]
+            if isinstance(value, tuple):
+                return tuple(walk(v) for v in value)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                text = str(value)
+                for plain, echo in pairs:
+                    if text == plain:
+                        return repl(echo)
+            return value
+
+        return walk(obj)
+
+    def protect_response(
+        self,
+        result: Mapping[str, Any],
+        schema: Mapping[str, DataClass | str],
+        lease_id: str,
+        echoes: Sequence[EchoValue] = (),
+    ) -> dict[str, Any]:
+        """Mandatory return path: schema protection plus echo guard.
+
+        A declared field whose raw value is exactly a value that was resolved for this
+        call gets back the *same* handle the agent sent, so the agent keeps one
+        identity per entity across the round trip.
+        """
+        lease = self._active_lease(lease_id)
+        normalized = {f: (dc if isinstance(dc, DataClass) else DataClass(dc)) for f, dc in schema.items()}
+        premapped: dict[str, str] = {}
+        for field, value in result.items():
+            dc = normalized.get(field)
+            if dc is None:
+                continue
+            for echo in echoes:
+                if echo.data_class is dc and type(value) is type(echo.value) and value == echo.value:
+                    if self.policy.for_class(dc, lease.purpose).action is not Transform.ALLOW:
+                        premapped[field] = echo.replacement
+                    break
+        rest = {f: v for f, v in result.items() if f not in premapped}
+        with self._unit_of_work():
+            protected = self._protect_record_locked(rest, normalized, lease)
+            if premapped:
+                self._audit_event("RESPONSE", lease, decision="ECHO_REMAPPED", count=len(premapped))
+        ordered = {f: (premapped[f] if f in premapped else protected[f]) for f in result if f in premapped or f in protected}
+        return self.scrub_echoes(ordered, echoes)
+
+    # ---------------------------------------------------------------- async
 
     def export_guarded_call_for_job(self, call: GuardedCall) -> dict[str, Any]:
         """Move references, not a lease, into the trusted async job envelope."""
         lease = self._active_lease(call.lease_id)
-        self._intent_authority.validate(call.intent, payload=call.payload, target=call.target, operation=call.operation)
+        entries = self._validated_entries(
+            call.intent,
+            lease=lease,
+            payload=call.payload,
+            target=call.target,
+            operation=call.operation,
+            reference_fields=call.reference_fields,
+            capability_fields=call.capability_fields,
+        )
+        self._intent_authority.consume_or_reject(call.intent.intent_id)
         refs: dict[str, Any] = {}
-        for field, data_class in call.reference_fields.items():
-            handle = call.payload[field]
-            entry = self.validate_handle_for_call(
-                handle,
-                lease.lease_id,
-                expected_class=data_class,
-                target=call.target,
-                operation=call.operation,
-            )
+        for field, entry in entries:
             exported = self._references.materialize_descriptor(entry.reference_id, lease_id=lease.lease_id)
             refs[field] = {
                 "kind": exported.kind.value,
@@ -751,31 +1135,12 @@ class BlueberryRuntime:
                 "target": entry.target,
                 "operation": entry.operation,
             }
-        for field in call.capability_fields:
-            handle = call.payload[field]
-            entry = self.validate_handle_for_call(
-                handle,
-                lease.lease_id,
-                expected_class=None,
-                target=call.target,
-                operation=call.operation,
-                capability=True,
-            )
-            exported = self._references.materialize_descriptor(entry.reference_id, lease_id=lease.lease_id)
-            refs[field] = {
-                "kind": exported.kind.value,
-                "data_class": exported.data_class.value,
-                "origin_scope": entry.origin_scope,
-                "payload": exported.payload,
-                "target": entry.target,
-                "operation": entry.operation,
-            }
-        self._intent_authority.consume(call.intent.intent_id)
         return {
             "tenant_id": lease.tenant_id,
             "agent_id": lease.agent_id,
             "purpose": lease.purpose,
             "scope": lease.scope,
+            "allowed_operations": {k: sorted(v) for k, v in lease.allowed_operations.items()},
             "target": call.target,
             "operation": call.operation,
             "references": refs,
@@ -831,6 +1196,8 @@ class BlueberryRuntime:
         )
         return resolve_exported(exported, sources=self._sources)
 
+    # -------------------------------------------------------------- lifecycle
+
     def destroy_lease(self, lease_id: str) -> None:
         with self._lock:
             lease = self._load_lease(lease_id)
@@ -839,15 +1206,17 @@ class BlueberryRuntime:
             self._destroy_locked(lease)
 
     def _destroy_locked(self, lease: Lease) -> None:
-        for handle in list(lease.handles):
-            self._state.delete(self.HANDLE_KIND, handle)
-        for reference_id in list(lease.reference_ids):
-            self._references.delete(reference_id)
-        lease.handles.clear()
-        lease.reference_ids.clear()
-        lease.revoked = True
-        self._save_lease(lease)
-        self._audit_event("LEASE_DESTROYED", lease, decision="DESTROY")
+        with self._state.transaction():
+            # Handles, references and index entries are all owned by the lease:
+            # one indexed delete, independent of how many handles the lease issued.
+            self._state.delete_owned(lease.lease_id)
+            lease.revoked = True
+            self._save_lease(lease)
+            self._audit_event("LEASE_DESTROYED", lease, decision="DESTROY")
+
+    def purge_expired(self) -> None:
+        """Drop expired handles/references/claims. Safe to call from a periodic task."""
+        self._backend.purge_expired()
 
     def audit_events(self) -> list[dict[str, Any]]:
         return self._backend.list_audit()
@@ -860,7 +1229,7 @@ class BlueberryRuntime:
             if lease is not None and not lease.revoked and lease.expires_at > now:
                 active += 1
         return {
-            "runtime_version": "0.3.0",
+            "runtime_version": "0.3.1",
             "policy_version": self.policy.version,
             "active_leases": active,
             "active_agent_handles": self._state.count(self.HANDLE_KIND),
@@ -874,9 +1243,13 @@ class BlueberryRuntime:
             "agent_visible_ciphertext": False,
             "public_decode_api": False,
             "source_data_mutation": False,
+            # The lease-local handle index is keyed (HMAC) and dies with the lease.
             "persistent_identity_mapping": False,
+            "handle_linkability_default": self.policy.default_linkability.value,
             "persistent_state_encrypted": True,
             "audit_key_process_random": False,
+            "atomic_intent_consumption": True,
+            "response_echo_guard": True,
             "unknown_field_default": self.policy.unknown_field_action.value,
             "metrics": dict(self._metrics),
         }

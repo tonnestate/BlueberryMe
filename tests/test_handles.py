@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from blueberryme.errors import LeaseDenied, PolicyDenied, RehydrationError
+from blueberryme.errors import LeaseDenied, PolicyDenied
 from blueberryme.models import DataClass
 from blueberryme.proxy import StructuredToolGuard, TargetAdapter
 
@@ -10,7 +10,9 @@ from blueberryme.proxy import StructuredToolGuard, TargetAdapter
 def test_agent_sees_random_handles_not_ciphertext(runtime, lease):
     a = runtime.protect_value("Max Mustermann", DataClass.PERSON, lease)
     b = runtime.protect_value("Max Mustermann", DataClass.PERSON, lease)
-    assert a != b
+    # Lease-linkable by default: one entity, one handle. The handle itself is random,
+    # never derived from the value (see test_linkability.py).
+    assert a == b
     assert re.fullmatch(r"BBM1H\.PERSON\.[A-Z2-7]{16}", a)
     assert "Max Mustermann" not in a
     assert runtime.evidence_snapshot()["agent_visible_ciphertext"] is False

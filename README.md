@@ -10,7 +10,7 @@ BlueberryMe sits between sensitive business data and AI agents. Its design goal 
 
 > **The agent carries references, never values. Authority to resolve them is minted per call, outside the agent, and bound to one target and one operation.**
 
-BlueberryMe v0.3.0 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs in EU business environments. It is **not** a legal compliance certificate.
+BlueberryMe v0.3.1 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs in EU business environments. It is **not** a legal compliance certificate.
 
 ## Why v0.3 is different
 
@@ -30,6 +30,18 @@ v0.1/v0.2 proved reversible protection, leases, policy and safe degradation. v0.
 - **Double policy check for async.** Once at submit, once at execution.
 - **Value-drift check.** A source pointer can bind `row_version`; changed source data fails the item safely.
 - **Progressive async loading.** Optional expensive providers are lazy-loaded and see only the already protected view.
+
+## What v0.3.1 adds
+
+A hardening release from an end-to-end review. Same protocol, fewer ways around it, and fast enough for real data volumes.
+
+- **One entity, one handle (per lease).** The same value or source pointer gets the same random handle inside a lease, so an agent can tell that two records concern the same customer. Leases stay unlinkable. Per class `linkability: OCCURRENCE` restores fresh-handle-per-occurrence. See [BBM-1 §3.1](docs/BBM-1.md).
+- **Echo guard on the return path.** If a target echoes a resolved name in free text (`"Letter sent to Max Mustermann"`), the agent receives its own handle instead. Echoed secrets are removed.
+- **Race-free replay protection.** Intents are burned atomically *before* resolution — also across processes sharing one state file. v0.3.0 had a check-then-mark window.
+- **No double execution of async jobs.** Workers win an expiring atomic claim; crashed workers are recovered; a cancel during execution discards the result.
+- **Gateway authentication with two planes.** Control-plane token (leases, ingress, capabilities) and per-agent tokens (jobs). Fails closed when unconfigured. v0.3.0 let anyone who reached the port create leases.
+- **No authority widening.** Async result leases are bound to the submitting agent and can never exceed the submitting lease's operations; the field map is signed into the intent; responses are always protected under the signed lease.
+- **Linear performance.** Lease-owned state is deleted with one indexed operation instead of rewriting a growing handle list on every protect; one SQLite connection with batched transactions; aggregated audit rows. Reference benchmark (1,000 records, 4 fields, SQLite): 51 → ~6,600 records/s, flat at 10,000 records.
 
 ## Core architecture
 
@@ -225,6 +237,7 @@ The bundled policy is intentionally readable YAML:
 classes:
   PERSON:
     action: TOKENIZE
+    linkability: LEASE        # default; OCCURRENCE = fresh handle per occurrence
     rehydrate:
       LETTER_SERVICE: ["DELIVER"]
 
@@ -273,17 +286,26 @@ blueberryme demo
 Current reference suite:
 
 ```text
-34 tests passing
+84 tests passing — including concurrency tests for replay, job double execution and result retrieval
 ```
 
 HTTP gateway:
 
 ```bash
 pip install -e .[api]
+export BBM_CONTROL_TOKEN="$(blueberryme gen-token)"                 # trusted orchestrator
+export BBM_AGENT_TOKENS="agent-a=$(blueberryme gen-token)"          # one token per agent
 blueberryme serve
 ```
 
-By default the HTTP gateway uses `.blueberryme/state.db` and a persistent local key. Use environment/KMS injection for production key material.
+| Plane | Credential | Endpoints |
+|---|---|---|
+| Control (trusted) | `BBM_CONTROL_TOKEN` | leases, `/v1/protect/*`, capabilities, status, evidence |
+| Agent (untrusted) | `BBM_AGENT_TOKENS` | `/v1/jobs` submit / status / cancel / result |
+
+Without tokens every request is refused (503). `BBM_INSECURE_DEV=1` disables authentication for local experiments only.
+
+By default the HTTP gateway uses `.blueberryme/state.db` and a persistent local key. Use environment/KMS injection for production key material. Call `runtime.purge_expired()` periodically to compact expired state.
 
 ## MCP
 
@@ -303,6 +325,7 @@ See [`docs/MCP-BINDING.md`](docs/MCP-BINDING.md).
 - It does not provide native HSM/KMS, OPA, SPIFFE, WORM or HA clustering.
 - SQLite is a reference persistent store, not the recommended HA store for a large regulated production deployment.
 - Exactly-once external side effects require the target to honour the supplied `idempotency_key`; BlueberryMe alone cannot undo a remote side effect after a worker crash.
+- The echo guard catches verbatim echoes of resolved values, not transformed ones (upper-cased, split, translated, summarised).
 - It is not a legal declaration of GDPR, DORA or sectoral compliance.
 
 The intent is a **simple data path with a hard privacy boundary**, not maximum cryptography everywhere.

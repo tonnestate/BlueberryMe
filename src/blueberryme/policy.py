@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from .models import ClassPolicy, DataClass, FlowRule, QualityAction, QualityPolicy, TokenMode, Transform
+from .models import ClassPolicy, DataClass, FlowRule, Linkability, QualityAction, QualityPolicy, TokenMode, Transform
 
 
 @dataclass(frozen=True)
@@ -19,11 +19,14 @@ class Policy:
     default_quality: QualityPolicy
     classes: dict[DataClass, ClassPolicy]
     flows: tuple[FlowRule, ...] = ()
+    default_linkability: Linkability = Linkability.LEASE
 
     def for_class(self, data_class: DataClass, purpose: str) -> ClassPolicy:
         rule = self.classes.get(data_class)
         if rule is None:
-            return ClassPolicy(action=self.default_action, quality=self.default_quality)
+            return ClassPolicy(
+                action=self.default_action, quality=self.default_quality, linkability=self.default_linkability
+            )
         if rule.allowed_purposes and purpose not in rule.allowed_purposes:
             return replace(rule, action=Transform.DENY)
         return rule
@@ -83,6 +86,7 @@ def _quality(raw: dict[str, Any] | None, default: QualityPolicy | None = None) -
 def load_policy(path: str | Path) -> Policy:
     raw = _load_raw(Path(path))
     default_quality = _quality(raw.get("quality"))
+    default_linkability = Linkability(raw.get("default_linkability", "LEASE"))
     classes: dict[DataClass, ClassPolicy] = {}
     for name, item in (raw.get("classes") or {}).items():
         dc = DataClass(name)
@@ -96,6 +100,7 @@ def load_policy(path: str | Path) -> Policy:
         classes[dc] = ClassPolicy(
             action=Transform(item.get("action", raw.get("default_action", "DENY"))),
             token_mode=TokenMode.LEASE_HANDLE,
+            linkability=Linkability(item.get("linkability", default_linkability.value)),
             rehydrate=rehydrate,
             allowed_purposes=frozenset(str(x) for x in item.get("allowed_purposes", [])),
             quality=_quality(item.get("quality"), default_quality),
@@ -122,4 +127,5 @@ def load_policy(path: str | Path) -> Policy:
         default_quality=default_quality,
         classes=classes,
         flows=tuple(flows),
+        default_linkability=default_linkability,
     )

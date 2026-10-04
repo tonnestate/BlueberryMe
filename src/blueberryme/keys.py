@@ -50,4 +50,5 @@ def subkeys(master_key: bytes) -> dict[str, bytes]:
         "state": derive_key(master_key, "state"),
         "intent": derive_key(master_key, "intent"),
         "audit": derive_key(master_key, "audit"),
+        "index": derive_key(master_key, "handle-index"),
     }

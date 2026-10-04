@@ -1,6 +1,6 @@
 # BBM/1 — Agent Privacy Protocol
 
-Status: **experimental draft 0.3**.
+Status: **experimental draft 0.3** (reference implementation 0.3.1).
 
 ## 1. Objective
 
@@ -34,6 +34,21 @@ BBM1C.<RANDOM>
 ```
 
 The agent-visible reference MUST NOT contain source plaintext or reversible ciphertext.
+
+### 3.1 Linkability
+
+The random part of a handle MUST NOT be derived from the value. Whether two occurrences
+share a handle is a policy decision per data class:
+
+- `LEASE` (default): inside one lease, the same value (CAPSULE) or the same source
+  pointer (SOURCE) yields the same handle. The agent can reason about "the same
+  customer" across records and tool calls. Different leases MUST remain unlinkable.
+  Two source records holding an equal value remain two handles: the pointer, not the
+  value, is the identity.
+- `OCCURRENCE`: every occurrence yields a fresh handle.
+
+An implementation that offers `LEASE` linkability needs a lookup index. That index MUST
+be keyed (e.g. HMAC under a dedicated key), scoped to the lease and deleted with it.
 
 ## 4. Reference store
 
@@ -90,7 +105,17 @@ policy_version
 expiry
 ```
 
-A conformant target adapter MUST validate audience, operation, payload binding, expiry, replay state and current policy before resolving.
+The intent MUST also bind the declared field-to-data-class map (which fields are
+references, which are capabilities). Unsigned call attributes MUST NOT influence
+resolution or the lease under which a response is protected.
+
+A conformant target adapter MUST validate audience, operation, payload binding, field
+map, expiry, replay state and current policy before resolving.
+
+Consumption is the commit point: an implementation MUST atomically mark the intent as
+consumed (first writer wins, across all processes sharing the replay store) **before**
+resolving any value. A "check consumed, resolve, then mark" sequence is not conformant
+because concurrent requests with one intent could all reach the target.
 
 There is no general model-accessible `decode(handle)` operation.
 
@@ -113,6 +138,18 @@ agent -> target rehydrates -> target stores plaintext -> agent reads target back
 ```
 
 The read response must be re-tokenised.
+
+### 8.1 Echo guard
+
+Field classification alone does not stop a target from echoing a resolved value inside
+an allowed free-text field (`"Letter sent to Max Mustermann"`). Because the trusted path
+knows exactly which values it resolved for this call, an implementation SHOULD replace
+every occurrence of those values anywhere in the response (values, nested structures,
+mapping keys) with the handle the agent already holds, and resolved secrets with a
+removal marker. Very short values SHOULD only be replaced as complete leaves.
+
+The echo guard is a deterministic second line; it does not replace a correct response
+schema and does not detect transformed or partial echoes.
 
 ## 9. Data-flow policy
 
@@ -176,6 +213,13 @@ The initial lease may expire immediately after submission.
 
 A Job Intent MUST be bound to one job, target, operation, purpose, envelope hash and deadline. v0.3 caps the reference deadline at 24 hours.
 
+A worker MUST win an atomic, expiring claim before executing a job; a crashed worker's
+claim expires and the job may be retried with the same idempotency key.
+
+Result retrieval MUST be bound to the submitting tenant, purpose and agent, and MUST be
+single-use atomically. The fresh result lease MUST NOT grant target operations the
+submitting lease did not have.
+
 ## 13. Idempotency
 
 `job_id` is the target idempotency key. The BBM runtime prevents a completed job from being re-executed by its own worker path. Exactly-once semantics for external side effects still require the target to implement idempotency.
@@ -205,6 +249,18 @@ Optional expensive providers may be lazy-loaded only after the synchronous priva
 
 > Enforce synchronously, enrich asynchronously.
 
-## 17. Transport bindings
+## 17. Control plane and agent plane
+
+Lease creation is the authority root. A gateway MUST authenticate two distinct planes:
+
+- **control plane** (trusted orchestrator): leases, ingress protection, capabilities,
+  evidence;
+- **agent plane** (untrusted): job submission, status, cancel, result retrieval.
+
+An agent credential MUST NOT be able to create or widen a lease. The agent identity MUST
+come from the authenticated credential, not from a request field. An unconfigured
+gateway MUST fail closed.
+
+## 18. Transport bindings
 
 BBM/1 is transport-independent. MCP is the first reference binding. Direct function calling, HTTP tools and A2A can implement the same semantics.

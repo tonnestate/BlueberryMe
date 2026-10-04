@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import inspect
+import secrets
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Mapping, Sequence
@@ -10,7 +11,7 @@ from .crypto import JOB_HANDLE_RE, args_hash, random_job_handle
 from .errors import BlueberryError, ErrorCode, JobError, SafeTargetError, StructureDenied
 from .models import DataClass, GuardedCall, JobIntent, JobStatus, ReferenceKind
 from .references import ExportedReference
-from .runtime import BlueberryRuntime
+from .runtime import SECRET_REMOVED, BlueberryRuntime, EchoValue
 
 
 def _pack(value: Any) -> Any:
@@ -87,6 +88,8 @@ class AsyncJobGateway:
         now = datetime.now(UTC)
         job = {
             "job_id": job_id,
+            "tenant_id": str(envelope["tenant_id"]),
+            "agent_id": str(envelope["agent_id"]),
             "status": JobStatus.QUEUED.value,
             "created_at": now.isoformat(),
             "updated_at": now.isoformat(),
@@ -98,6 +101,7 @@ class AsyncJobGateway:
             "envelope": _pack(envelope),
             "envelope_hash": envelope_hash,
             "intent": _intent_to_json(intent),
+            "echo": None,
             "response_schema": {
                 field: (dc.value if isinstance(dc, DataClass) else DataClass(dc).value)
                 for field, dc in response_schema.items()
@@ -107,11 +111,14 @@ class AsyncJobGateway:
         self.runtime.secure_state.put_json(self.KIND, job_id, job)
         return job_id
 
-    def _load(self, job_handle: str) -> dict[str, Any]:
-        if not JOB_HANDLE_RE.fullmatch(job_handle):
+    def _load(self, job_handle: str, *, agent_id: str | None = None) -> dict[str, Any]:
+        if not isinstance(job_handle, str) or not JOB_HANDLE_RE.fullmatch(job_handle):
             raise JobError(code=ErrorCode.JOB_UNKNOWN)
         item = self.runtime.secure_state.get_json(self.KIND, job_handle)
         if item is None:
+            raise JobError(code=ErrorCode.JOB_UNKNOWN)
+        # Another agent's job is indistinguishable from a job that does not exist.
+        if agent_id is not None and item.get("agent_id") != agent_id:
             raise JobError(code=ErrorCode.JOB_UNKNOWN)
         return item
 
@@ -126,25 +133,23 @@ class AsyncJobGateway:
             out["error"] = {"code": job["error_code"]}
         return out
 
-    def status(self, job_handle: str) -> dict[str, Any]:
-        job = self._load(job_handle)
+    def status(self, job_handle: str, *, agent_id: str | None = None) -> dict[str, Any]:
+        job = self._load(job_handle, agent_id=agent_id)
         if job["status"] not in {JobStatus.COMPLETED.value, JobStatus.RETRIEVED.value, JobStatus.CANCELLED.value}:
             if datetime.now(UTC) >= datetime.fromisoformat(job["deadline_at"]):
                 job["status"] = JobStatus.EXPIRED.value
                 job["error_code"] = ErrorCode.JOB_EXPIRED.value
-                job["envelope"] = None
-                job["result"] = None
+                self._discard(job)
                 self._save(job)
         return self._status_view(job)
 
-    def cancel(self, job_handle: str) -> dict[str, Any]:
-        job = self._load(job_handle)
+    def cancel(self, job_handle: str, *, agent_id: str | None = None) -> dict[str, Any]:
+        job = self._load(job_handle, agent_id=agent_id)
         if job["status"] in {JobStatus.COMPLETED.value, JobStatus.RETRIEVED.value}:
             return self._status_view(job)
         job["status"] = JobStatus.CANCELLED.value
         job["error_code"] = ErrorCode.JOB_CANCELLED.value
-        job["envelope"] = None
-        job["result"] = None
+        self._discard(job)
         intent = _intent_from_json(job["intent"])
         self.runtime.intent_authority.consume(intent.intent_id)
         self._save(job)
@@ -163,22 +168,55 @@ class AsyncJobGateway:
             return handler(payload, idempotency_key=job_id)
         return handler(payload)
 
-    def execute(self, job_handle: str, handler: Callable[..., Any]) -> dict[str, Any]:
-        """Trusted worker execution. This method must not be exposed to the agent zone."""
+    def _discard(self, job: dict[str, Any]) -> None:
+        job["envelope"] = None
+        job["result"] = None
+        job["echo"] = None
+
+    def execute(
+        self,
+        job_handle: str,
+        handler: Callable[..., Any],
+        *,
+        claim_ttl_seconds: float = 900,
+    ) -> dict[str, Any]:
+        """Trusted worker execution. This method must not be exposed to the agent zone.
+
+        A worker must first win an atomic claim on the job, so two workers (threads or
+        processes sharing the state store) can never run the same job concurrently. If a
+        worker dies, its claim expires after ``claim_ttl_seconds`` and the job can be
+        picked up again; the target sees the same ``idempotency_key`` both times.
+        ``claim_ttl_seconds`` must exceed the handler's worst-case runtime.
+        """
+        job = self._load(job_handle)
+        if JobStatus(job["status"]) in {JobStatus.COMPLETED, JobStatus.RETRIEVED}:
+            return self._status_view(job)
+
+        holder = "BBM1-WORKER-" + secrets.token_urlsafe(12)
+        claim = f"job:{job_handle}"
+        backend = self.runtime.secure_state.backend
+        if not backend.try_claim(claim, holder, claim_ttl_seconds):
+            raise JobError(code=ErrorCode.JOB_ALREADY_RUNNING)
+        try:
+            return self._execute_claimed(job_handle, handler)
+        finally:
+            backend.release_claim(claim, holder)
+
+    def _execute_claimed(self, job_handle: str, handler: Callable[..., Any]) -> dict[str, Any]:
+        # Re-read after winning the claim: another worker may have finished meanwhile.
         job = self._load(job_handle)
         status = JobStatus(job["status"])
-        if status in {JobStatus.COMPLETED, JobStatus.RETRIEVED}:
+        if status in {JobStatus.COMPLETED, JobStatus.RETRIEVED, JobStatus.FAILED}:
             return self._status_view(job)
         if status is JobStatus.CANCELLED:
             raise JobError(code=ErrorCode.JOB_CANCELLED)
         if status is JobStatus.EXPIRED or datetime.now(UTC) >= datetime.fromisoformat(job["deadline_at"]):
             job["status"] = JobStatus.EXPIRED.value
             job["error_code"] = ErrorCode.JOB_EXPIRED.value
-            job["envelope"] = None
+            self._discard(job)
             self._save(job)
             raise JobError(code=ErrorCode.JOB_EXPIRED)
-        if status is JobStatus.RUNNING:
-            raise JobError(code=ErrorCode.JOB_ALREADY_RUNNING)
+        # A RUNNING job without a live claim belongs to a crashed worker: retry it.
 
         envelope = _unpack(job["envelope"])
         intent = _intent_from_json(job["intent"])
@@ -193,16 +231,26 @@ class AsyncJobGateway:
         job["error_code"] = None
         self._save(job)
 
+        def finish(mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+            # A cancel that arrived while the handler ran wins: its result is discarded.
+            current = self._load(job_handle)
+            if current["status"] == JobStatus.CANCELLED.value:
+                return self._status_view(current)
+            mutate(current)
+            self._save(current)
+            return self._status_view(current)
+
         try:
             # Policy check #2 occurs at execution time, after possible revocation or policy change.
             resolved = deepcopy(envelope["passthrough"])
+            echoes: list[dict[str, Any]] = []
             for field, item in envelope["references"].items():
                 exported = ExportedReference(
                     kind=ReferenceKind(item["kind"]),
                     data_class=DataClass(item["data_class"]),
                     payload=dict(item["payload"]),
                 )
-                resolved[field] = self.runtime.resolve_exported_for_job(
+                value = self.runtime.resolve_exported_for_job(
                     exported,
                     tenant_id=str(envelope["tenant_id"]),
                     purpose=str(envelope["purpose"]),
@@ -212,46 +260,58 @@ class AsyncJobGateway:
                     capability_target=item.get("target"),
                     capability_operation=item.get("operation"),
                 )
+                resolved[field] = value
+                echoes.append(
+                    {
+                        "value": _pack(value),
+                        "data_class": exported.data_class.value,
+                        "secret": exported.kind is ReferenceKind.CAPABILITY,
+                    }
+                )
 
             result = self._call_handler(handler, resolved, job_handle)
             if result is None:
                 result = {}
             if not isinstance(result, Mapping):
                 raise StructureDenied()
-            job["result"] = _pack(dict(result))
-            job["result_expires_at"] = (
-                datetime.now(UTC) + timedelta(seconds=int(job["result_ttl_seconds"]))
-            ).isoformat()
-            job["status"] = JobStatus.COMPLETED.value
-            job["error_code"] = None
+
+            def complete(current: dict[str, Any]) -> None:
+                current["result"] = _pack(dict(result))
+                current["echo"] = echoes
+                current["result_expires_at"] = (
+                    datetime.now(UTC) + timedelta(seconds=int(current["result_ttl_seconds"]))
+                ).isoformat()
+                current["status"] = JobStatus.COMPLETED.value
+                current["error_code"] = None
+
+            view = finish(complete)
             self.runtime.intent_authority.consume(intent.intent_id)
-            self._save(job)
-            return self._status_view(job)
+            return view
         except SafeTargetError as exc:
-            if exc.retryable:
-                job["status"] = JobStatus.QUEUED.value
-            else:
-                job["status"] = JobStatus.FAILED.value
-                self.runtime.intent_authority.consume(intent.intent_id)
-            job["error_code"] = exc.code
-            self._save(job)
-            return self._status_view(job)
+            return self._fail(finish, intent, retry=exc.retryable, code=exc.code)
         except BlueberryError as exc:
             # Infrastructure failures can be retried; policy/rehydration failures are terminal.
-            if exc.failure_class.value == "INFRASTRUCTURE":
-                job["status"] = JobStatus.QUEUED.value
-            else:
-                job["status"] = JobStatus.FAILED.value
-                self.runtime.intent_authority.consume(intent.intent_id)
-            job["error_code"] = exc.code.value
-            self._save(job)
-            return self._status_view(job)
+            return self._fail(finish, intent, retry=exc.failure_class.value == "INFRASTRUCTURE", code=exc.code.value)
         except Exception:
-            job["status"] = JobStatus.FAILED.value
-            job["error_code"] = ErrorCode.TARGET_ERROR.value
             self.runtime.intent_authority.consume(intent.intent_id)
-            self._save(job)
-            return self._status_view(job)
+
+            def crashed(current: dict[str, Any]) -> None:
+                current["status"] = JobStatus.FAILED.value
+                current["error_code"] = ErrorCode.TARGET_ERROR.value
+
+            return finish(crashed)
+
+    def _fail(
+        self, finish: Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]], intent: JobIntent, *, retry: bool, code: str
+    ) -> dict[str, Any]:
+        if not retry:
+            self.runtime.intent_authority.consume(intent.intent_id)
+
+        def mutate(current: dict[str, Any]) -> None:
+            current["status"] = JobStatus.QUEUED.value if retry else JobStatus.FAILED.value
+            current["error_code"] = code
+
+        return finish(mutate)
 
     def get_result(
         self,
@@ -264,24 +324,47 @@ class AsyncJobGateway:
         allowed_operations: Mapping[str, Sequence[str]] | None = None,
         lease_ttl_seconds: int = 300,
     ) -> dict[str, Any]:
+        """Retrieve a completed result once, re-tokenised under a fresh lease.
+
+        The result is bound to the submitting agent, tenant and purpose. The new lease
+        can never grant more target operations than the submitting lease had: requested
+        operations are intersected with the original ones (omitted -> original set).
+        """
         job = self._load(job_handle)
         if job["status"] == JobStatus.RETRIEVED.value:
             raise JobError(code=ErrorCode.JOB_RESULT_EXPIRED)
         if job["status"] != JobStatus.COMPLETED.value:
             raise JobError(code=ErrorCode.JOB_NOT_READY)
         envelope = _unpack(job["envelope"])
-        if str(envelope["tenant_id"]) != tenant_id or str(envelope["purpose"]) != purpose:
+        if (
+            str(envelope["tenant_id"]) != tenant_id
+            or str(envelope["purpose"]) != purpose
+            or str(envelope["agent_id"]) != agent_id
+        ):
             raise JobError(code=ErrorCode.JOB_PURPOSE_MISMATCH)
         if not self.runtime.purpose_active(tenant_id, purpose):
             raise JobError(code=ErrorCode.PURPOSE_REVOKED)
         result_expires_at = job.get("result_expires_at")
         if not result_expires_at or datetime.now(UTC) >= datetime.fromisoformat(result_expires_at):
             job["status"] = JobStatus.EXPIRED.value
-            job["result"] = None
-            job["envelope"] = None
             job["error_code"] = ErrorCode.JOB_RESULT_EXPIRED.value
+            self._discard(job)
             self._save(job)
             raise JobError(code=ErrorCode.JOB_RESULT_EXPIRED)
+        # Single retrieval, atomic across concurrent callers and processes.
+        if not self.runtime.intent_authority.consume_once(f"result:{job_handle}"):
+            raise JobError(code=ErrorCode.JOB_RESULT_EXPIRED)
+
+        original_ops = {str(k): set(map(str, v)) for k, v in (envelope.get("allowed_operations") or {}).items()}
+        if allowed_operations is None:
+            granted = {k: sorted(v) for k, v in original_ops.items()}
+        else:
+            granted = {}
+            for target, ops in allowed_operations.items():
+                base = original_ops.get(str(target), set())
+                keep = {str(op) for op in ops if str(op) in base or "*" in base}
+                if keep:
+                    granted[str(target)] = sorted(keep)
 
         lease_id = self.runtime.create_lease(
             tenant_id=tenant_id,
@@ -289,16 +372,32 @@ class AsyncJobGateway:
             purpose=purpose,
             scope=scope,
             ttl_seconds=lease_ttl_seconds,
-            allowed_operations=allowed_operations,
+            allowed_operations=granted,
         )
         raw_result = _unpack(job["result"])
         schema = {field: DataClass(dc) for field, dc in job["response_schema"].items()}
+        echoes = [
+            EchoValue(
+                value=_unpack(item["value"]),
+                data_class=DataClass(item["data_class"]),
+                replacement=SECRET_REMOVED if item.get("secret") else "",
+            )
+            for item in (job.get("echo") or [])
+        ]
+
+        def replacement(echo: EchoValue) -> str:
+            # Secrets are removed, everything else gets a handle in the *new* lease.
+            if echo.replacement == SECRET_REMOVED or echo.data_class is DataClass.SECRET:
+                return SECRET_REMOVED
+            handle = self.runtime.protect_value(echo.value, echo.data_class, lease_id)
+            return handle if isinstance(handle, str) else f"[BBM:{echo.data_class.value}:REMOVED]"
+
         protected = self.runtime.protect_record(raw_result, schema, lease_id)
+        protected = self.runtime.scrub_echoes(protected, echoes, replacement)
 
         # Data minimisation: once retrieved, the trusted job/result payload is discarded.
         job["status"] = JobStatus.RETRIEVED.value
         job["result_retrieved"] = True
-        job["result"] = None
-        job["envelope"] = None
+        self._discard(job)
         self._save(job)
         return {"job_handle": job_handle, "lease_id": lease_id, "result": protected}

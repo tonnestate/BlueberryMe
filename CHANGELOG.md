@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.3.1 — 2026-10-04
+
+Hardening release from an end-to-end review. Protocol draft stays BBM/1-draft-0.3; the
+spec text gains normative clarifications (§3.1, §6, §8.1, §12, §17).
+
+### Security fixes
+
+- **Intent replay race:** intents were checked for consumption before resolution but
+  marked consumed only afterwards, so concurrent requests with one intent could all reach
+  the target. Consumption is now atomic and happens before any value is resolved
+  (`consume_or_reject`), also across processes sharing a SQLite state file.
+- **Async double execution:** two workers could run the same job concurrently. Workers
+  now need an expiring atomic claim; jobs of crashed workers are recovered after claim
+  expiry; a cancel that arrives during execution discards the result.
+- **Unauthenticated gateway:** the HTTP gateway accepted lease creation from anyone. It
+  now separates control-plane (`BBM_CONTROL_TOKEN`) and agent-plane credentials
+  (`BBM_AGENT_TOKENS`, identity from the token), refuses weak/shared tokens and fails
+  closed when unconfigured.
+- **Result-lease escalation:** `get_result` created a lease with caller-chosen operations
+  and accepted any agent id. Results are now bound to the submitting agent, retrieval is
+  atomic single-use, and the new lease is the intersection with the submitting lease.
+- **Unsigned call attributes:** the field-to-class map is signed into the intent
+  (`fields_hash`); response protection uses the intent's lease, not the call's.
+- **Source-adapter exceptions** no longer escape `TargetAdapter.execute`; they map to
+  `BBM_SOURCE_UNAVAILABLE`.
+
+### Features
+
+- Lease-local handle linkability (`linkability: LEASE` default, `OCCURRENCE` per class)
+  with an HMAC-keyed lookup index that is deleted with the lease.
+- Echo guard on sync and async return paths; declared response fields that echo a
+  resolved value return the agent's original handle.
+- `BlueberryRuntime.protect_response`, `materialize_for_target`, `scrub_echoes`,
+  `purge_expired`, `lease_owner`, `lease_operations`.
+- `blueberryme gen-token`; `blueberryme serve` warns about missing/insecure auth.
+- `blueberryme.api` no longer creates state or reads credentials at import time
+  (`create_app()` factory; `blueberryme.api:app` still works for uvicorn).
+
+### Performance
+
+- Lease-owned objects are deleted via an owner index instead of rewriting the full
+  handle list into the lease record on every protect (was O(n²) per lease).
+- One persistent SQLite connection, batched transactions per call, aggregated audit
+  rows per call and decision.
+- Reference benchmark (SQLite, 4 fields/record): 51 → ~6,600 records/s at 1,000 records,
+  flat at 10,000.
+
+### Compatibility
+
+- v0.3.0 SQLite state files are migrated in place (`owner` column).
+- `StateBackend` implementations need `delete_owned`, `consume_once`, `try_claim`,
+  `release_claim`, `purge_expired` and `transaction`.
+- Same value within a lease now returns the same handle by default (was a fresh handle).
+- `AsyncJobGateway.get_result` requires the submitting agent's id.
+
+### Tests
+
+- 84 tests (was 45 with 8 failing): stale v0.2 tests ported, plus concurrency tests for
+  replay, job claims and result retrieval, echo guard, linkability, gateway auth and
+  storage migration.
+
 ## 0.3.0 — 2026-10-02
 
 ### Architecture

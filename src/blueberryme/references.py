@@ -103,6 +103,7 @@ class ReferenceStore:
         data_class: DataClass,
         kind: ReferenceKind = ReferenceKind.CAPSULE,
         expires_at: float | None = None,
+        owner: str | None = None,
     ) -> None:
         self._state.put_json(
             self.KIND,
@@ -114,6 +115,7 @@ class ReferenceStore:
                 "payload": self._encode_capsule(value),
             },
             expires_at=expires_at,
+            owner=owner,
         )
 
     def put_source(
@@ -124,6 +126,7 @@ class ReferenceStore:
         lease_id: str,
         data_class: DataClass,
         expires_at: float | None = None,
+        owner: str | None = None,
     ) -> None:
         self._state.put_json(
             self.KIND,
@@ -140,6 +143,7 @@ class ReferenceStore:
                 },
             },
             expires_at=expires_at,
+            owner=owner,
         )
 
     def materialize_descriptor(self, reference_id: str, *, lease_id: str) -> ExportedReference:
