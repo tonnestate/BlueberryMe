@@ -5,6 +5,12 @@
 Hardening release from an end-to-end review. Protocol draft stays BBM/1-draft-0.3; the
 spec text gains normative clarifications (§3.1, §6, §8.1, §12, §17).
 
+### License
+
+- **Relicensed from GPL-3.0-only to AGPL-3.0-only.** BlueberryMe runs as a network
+  gateway; the AGPL ensures modified versions offered over a network share their source.
+  The gateway exposes `GET /source` (configurable via `BBM_SOURCE_URL`).
+
 ### Security fixes
 
 - **Intent replay race:** intents were checked for consumption before resolution but
@@ -57,7 +63,7 @@ spec text gains normative clarifications (§3.1, §6, §8.1, §12, §17).
 
 ### Tests
 
-- 84 tests (was 45 with 8 failing): stale v0.2 tests ported, plus concurrency tests for
+- 85 tests (was 45 with 8 failing): stale v0.2 tests ported, plus concurrency tests for
   replay, job claims and result retrieval, echo guard, linkability, gateway auth and
   storage migration.
 

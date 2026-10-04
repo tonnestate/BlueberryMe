@@ -286,7 +286,7 @@ blueberryme demo
 Current reference suite:
 
 ```text
-84 tests passing — including concurrency tests for replay, job double execution and result retrieval
+85 tests passing — including concurrency tests for replay, job double execution and result retrieval
 ```
 
 HTTP gateway:
@@ -341,4 +341,4 @@ The intent is a **simple data path with a hard privacy boundary**, not maximum c
 
 ## License
 
-BlueberryMe is released under **GPL-3.0-only**. GPLv3 permits commercial use. The project is structured so the copyright holder can later offer separate proprietary/commercial terms; see [`COMMERCIAL-LICENSING.md`](COMMERCIAL-LICENSING.md).
+BlueberryMe is released under **AGPL-3.0-only** (since v0.3.1; earlier versions were GPL-3.0-only). Commercial use is permitted. If you run a **modified** version as a network service, its users must be able to obtain your modified source. See [`COMMERCIAL-LICENSING.md`](COMMERCIAL-LICENSING.md).

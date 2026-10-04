@@ -109,3 +109,9 @@ def test_agent_tokens_parse_from_env(monkeypatch):
     monkeypatch.setenv("BBM_AGENT_TOKENS", f"agent-a={AGENT_A}, agent-b={AGENT_B}")
     auth = GatewayAuth.from_env()
     assert auth.agent_tokens == {AGENT_A: "agent-a", AGENT_B: "agent-b"}
+
+
+def test_source_endpoint_is_public_and_carries_license(client):
+    r = client.get("/source")
+    assert r.status_code == 200
+    assert r.json()["license"] == "AGPL-3.0-only"

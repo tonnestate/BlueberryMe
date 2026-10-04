@@ -1,6 +1,6 @@
 # Contributing
 
-BlueberryMe is GPL-3.0-only and is intentionally kept compatible with a possible future dual-license model.
+BlueberryMe is AGPL-3.0-only and is intentionally kept compatible with a possible future dual-license model.
 
 For now:
 

@@ -1,15 +1,22 @@
-# Commercial licensing
+# Licensing
 
-BlueberryMe is currently published under **GPL-3.0-only**.
+BlueberryMe is published under **AGPL-3.0-only** (from v0.3.1; v0.3.0 and earlier were GPL-3.0-only).
 
-GPLv3 permits commercial use. Organizations may run BlueberryMe internally. Internal use alone does not automatically require publication of unrelated proprietary internal software.
+## Why AGPL
 
-GPL obligations become especially relevant when GPL-covered or derivative software is distributed/conveyed. Organizations should obtain their own legal advice for their distribution and integration model.
+BlueberryMe is typically deployed as a network gateway in front of AI agents. Under the plain GPL, a modified version could be offered to others purely as a hosted service without sharing those modifications. The AGPL closes that gap: section 13 requires that users who interact with a **modified** version over a network can obtain its source code.
 
-## Future dual licensing
+## What this means in practice
 
-The project is structured so that the copyright holder can later offer a separate proprietary/commercial license for organizations that need different licensing terms, warranties, support, certification packages, hardened enterprise components or commercial redistribution rights.
+- Commercial use is permitted. Organizations may run BlueberryMe internally and in production.
+- Running an **unmodified** BlueberryMe does not create additional obligations beyond the license itself.
+- If you **modify** BlueberryMe and let users interact with it over a network (including agents and orchestrators calling the gateway), you must offer those users the corresponding source of your modified version.
+- Integrating BlueberryMe through its HTTP/MCP interfaces does not by itself place your separate applications under the AGPL. Linking or embedding it into your own program is a different case; obtain legal advice for your integration model.
 
-To preserve that option, third-party code contributions are accepted only under an explicit contributor agreement that grants the rights required for dual licensing.
+The gateway exposes `GET /source` with the source location and license so that network users can find the code.
 
-This document is an explanation of project intent, not legal advice and not a substitute for the GPL text in `LICENSE`.
+## Future licensing options
+
+The copyright holder may later offer separate terms for organizations that need them. To keep that option open, third-party code contributions are accepted only under an explicit contributor agreement (see `CONTRIBUTING.md`). There is no commercial edition at this time.
+
+This document explains project intent. It is not legal advice and not a substitute for the license text in `LICENSE`.

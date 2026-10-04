@@ -32,6 +32,8 @@ from .proxy import StructuredToolGuard
 from .runtime import BlueberryRuntime
 
 MIN_TOKEN_LENGTH = 32
+# Operators running a modified version must point this at their modified source.
+SOURCE_URL = os.environ.get("BBM_SOURCE_URL", "https://github.com/tonnestate/BlueberryMe")
 
 
 class StrictModel(BaseModel):
@@ -191,6 +193,13 @@ def create_app(runtime: BlueberryRuntime | None = None, auth: GatewayAuth | None
         except ValueError as exc:
             # Never return str(exc): validation errors may contain input data.
             raise HTTPException(status_code=400, detail={"code": "BBM_BAD_REQUEST", "class": "POLICY"}) from exc
+
+    # ------------------------------------------------------------- public
+
+    @app.get("/source")
+    def source() -> dict[str, str]:
+        # AGPL-3.0 section 13: network users can find the source. No data, no auth.
+        return {"name": "BlueberryMe", "version": "0.3.1", "license": "AGPL-3.0-only", "source": SOURCE_URL}
 
     # ---------------------------------------------------------- control plane
 
