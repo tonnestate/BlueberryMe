@@ -101,9 +101,52 @@ def demo() -> None:
 def serve(host: str = "127.0.0.1", port: int = 8787) -> None:
     try:
         import uvicorn
+
+        from .api import create_app_from_env
     except ImportError as exc:
         raise typer.BadParameter("Install blueberryme[api] to run the gateway") from exc
-    uvicorn.run("blueberryme.api:app", host=host, port=port, reload=False)
+    try:
+        gateway = create_app_from_env()
+    except (RuntimeError, ValueError) as exc:
+        # Startup configuration errors (missing key material, missing API keys) are safe to print.
+        typer.echo(f"BlueberryMe gateway not started: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    uvicorn.run(gateway, host=host, port=port, reload=False)
+
+
+@app.command("api-key")
+def api_key(
+    tenant_id: str = typer.Option(..., "--tenant-id", help="Tenant this key acts for."),
+    purpose: list[str] = typer.Option(..., "--purpose", help="Allowed purpose; repeat for several."),
+    agent_id: str = typer.Option("", "--agent-id", help="Bind the key to one agent (recommended)."),
+) -> None:
+    """Generate an API key. Prints the key once and the entry for BBM_API_KEYS_FILE."""
+    import yaml
+
+    from .auth import generate_api_key
+
+    key, digest = generate_api_key()
+    entry: dict = {"sha256": digest, "tenant_id": tenant_id, "purposes": list(purpose)}
+    if agent_id:
+        entry["agent_id"] = agent_id
+    typer.echo("API key (shown once, give it to the client):")
+    typer.echo(f"  {key}")
+    typer.echo("")
+    typer.echo("Add this entry under 'keys:' in the file referenced by BBM_API_KEYS_FILE:")
+    typer.echo(yaml.safe_dump([entry], sort_keys=False).rstrip())
+
+
+@app.command()
+def keygen(path: Path = typer.Argument(..., help="Key file to create; keep it outside the state directory.")) -> None:
+    """Create a new 32-byte master key file (mode 0600)."""
+    from .keys import write_master_key_file
+
+    try:
+        written = write_master_key_file(path)
+    except FileExistsError as exc:
+        raise typer.BadParameter(f"{path} already exists; refusing to overwrite") from exc
+    typer.echo(f"Wrote master key to {written}")
+    typer.echo(f"Start the gateway with BBM_MASTER_KEY_FILE={written}")
 
 
 @app.command()

@@ -258,6 +258,11 @@ class BlueberryRuntime:
                 raise PolicyDenied(code=ErrorCode.PURPOSE_REVOKED)
             return lease
 
+    def lease_identity(self, lease_id: str) -> dict[str, str]:
+        """Owner of an active lease, for gateway-side authorization. Contains no secrets."""
+        lease = self._active_lease(lease_id)
+        return {"tenant_id": lease.tenant_id, "agent_id": lease.agent_id, "purpose": lease.purpose}
+
     @staticmethod
     def _operation_allowed(lease: Lease, target: str, operation: str) -> bool:
         allowed = lease.allowed_operations.get(target, frozenset())

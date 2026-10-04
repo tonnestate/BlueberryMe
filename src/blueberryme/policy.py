@@ -9,6 +9,10 @@ import yaml
 
 from .models import ClassPolicy, DataClass, FlowRule, QualityAction, QualityPolicy, TokenMode, Transform
 
+# Classes whose plaintext must never reach the agent, whatever a policy file says.
+# Credentials are represented by SECRET (and capabilities); payment identifiers by IBAN.
+NEVER_ALLOW: frozenset[DataClass] = frozenset({DataClass.SECRET, DataClass.IBAN})
+
 
 @dataclass(frozen=True)
 class Policy:
@@ -114,10 +118,17 @@ def load_policy(path: str | Path) -> Policy:
             )
         )
 
+    default_action = Transform(raw.get("default_action", "DENY"))
+    for dc in NEVER_ALLOW:
+        rule = classes.get(dc)
+        effective = rule.action if rule is not None else default_action
+        if effective is Transform.ALLOW:
+            raise ValueError(f"Policy may not ALLOW plaintext for {dc.value} (set TOKENIZE or DENY)")
+
     return Policy(
         version=str(raw.get("version", "BBM/1-draft-0.3")),
         strict_structured_data=bool(raw.get("strict_structured_data", True)),
-        default_action=Transform(raw.get("default_action", "DENY")),
+        default_action=default_action,
         unknown_field_action=QualityAction(raw.get("unknown_field_action", "PROTECT")),
         default_quality=default_quality,
         classes=classes,
