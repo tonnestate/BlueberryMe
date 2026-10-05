@@ -1,6 +1,6 @@
 # BBM/1 — Agent Privacy Protocol
 
-Status: **experimental draft 0.4** (reference implementation 0.4.1).
+Status: **experimental draft 0.4** (reference implementation 0.4.2).
 
 ## 1. Objective
 
@@ -333,3 +333,36 @@ Post-hoc masking after an agent/harness has already received plaintext does not 
 
 Host-specific tools may bind to this contract, but BBM/1 does not standardize a particular SSMS, IDE or
 grid-reader function name.
+
+
+## 22. Privacy compilation
+
+A conformant implementation MAY compile a previously established structured-data privacy decision into a
+reusable recipe to avoid repeating expensive classification on every row.
+
+A reusable recipe MUST be bound at least to:
+
+```text
+dataset
+schema fingerprint
+policy version
+purpose
+operation
+destination
+```
+
+Changing any of these inputs MUST prevent reuse of the old recipe.
+
+A compiled recipe SHOULD record field classification, disclosure action, provenance and contradictions.
+Agent/model-supplied classification MAY increase protection but MUST NOT widen disclosure authority by itself.
+
+Independent contradictory evidence MUST NOT silently promote a recipe to the reusable fast path. A safe
+implementation SHOULD choose the stricter applicable disclosure result until the contradiction is resolved.
+
+Hot-path execution MUST continue to enforce current lease and dataset constraints. Compilation is an
+optimization of classification/decision reuse, not a bypass around authorization.
+
+Fields absent from the compiled surface MUST fail closed until the surface is recompiled or an explicit
+policy handles the change.
+
+Implementations SHOULD use exact-context recipe dispatch rather than scanning a global recipe corpus.
