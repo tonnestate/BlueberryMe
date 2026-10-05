@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.0 — 2026-10-05
+
+Major boundary and scale release.
+
+### Execution Boundary
+
+- Added `blueberryme zone-check`: a transport/sandbox-independent conformance probe for credential environment, sensitive host paths, direct source/target reachability, cloud metadata, arbitrary Internet egress and positive BBM-gateway reachability.
+- Added `blueberryme run-agent`: a deliberately thin wrapper around Anthropic sandbox-runtime (`srt`). BBM generates the restrictive profile; srt/OS primitives enforce it. Docker, Devcontainers, Kubernetes and VMs remain valid alternative boundaries.
+- Generated Python/shell/MCP child processes are treated as untrusted code and must inherit the same Agent Zone. BlueberryMe does not attempt source-code intent analysis.
+- Added an explicit IDE boundary: wrapping terminal commands does not sandbox built-in IDE file/search capabilities.
+
+### Data plane
+
+- Added reusable compiled structured-schema plans with a stable policy+schema fingerprint.
+- Added bounded compiled-batch protection to keep memory proportional to chunk size.
+- Added a small data-plane planner that prefers source-side aggregate pushdown for very large analytical requests that do not require entity references.
+- Formalized the scale invariant: BBM state grows with active references/jobs/capsules, not with the source database size.
+
+### Protocol / documentation
+
+- BBM/1 draft moves to 0.4 and adds Execution Boundary and database-scale data-plane requirements without making a particular sandbox or SQL engine part of the protocol.
+- Added `docs/EXECUTION-BOUNDARY.md` and `docs/DATA-PLANE.md`.
+- Non-bypassability remains a deployment property, but v0.4 now provides a concrete probe for collecting evidence about the tested boundary.
+
+### Tests
+
+- Added unit coverage for restrictive srt profile generation, environment scrubbing, zone-check result semantics, schema compilation and pushdown planning.
+
+
 ## 0.3.1 — 2026-10-04
 
 Hardening release from an end-to-end review. Protocol draft stays BBM/1-draft-0.3; the

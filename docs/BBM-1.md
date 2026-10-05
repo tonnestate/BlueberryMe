@@ -1,6 +1,6 @@
 # BBM/1 — Agent Privacy Protocol
 
-Status: **experimental draft 0.3** (reference implementation 0.3.1).
+Status: **experimental draft 0.4** (reference implementation 0.4.0).
 
 ## 1. Objective
 
@@ -211,7 +211,7 @@ encrypted result -> new lease -> model-visible re-tokenised response
 
 The initial lease may expire immediately after submission.
 
-A Job Intent MUST be bound to one job, target, operation, purpose, envelope hash and deadline. v0.3 caps the reference deadline at 24 hours.
+A Job Intent MUST be bound to one job, target, operation, purpose, envelope hash and deadline. the reference implementation caps the reference deadline at 24 hours.
 
 A worker MUST win an atomic, expiring claim before executing a job; a crashed worker's
 claim expires and the job may be retried with the same idempotency key.
@@ -264,3 +264,24 @@ gateway MUST fail closed.
 ## 18. Transport bindings
 
 BBM/1 is transport-independent. MCP is the first reference binding. Direct function calling, HTTP tools and A2A can implement the same semantics.
+
+
+## 19. Execution Boundary
+
+Non-bypassability is a deployment property. A conformant high-safety Agent Zone MUST NOT provide direct source credentials, direct Resolve/KMS credentials or an unmediated route to trusted targets.
+
+Generated code is not a privileged exception. Python, shell, local MCP children and other child processes MUST inherit the same effective boundary as the agent that created them.
+
+BBM/1 does not mandate a sandbox product. An implementation MAY use OS sandboxing, containers, Devcontainers, Kubernetes, VMs or equivalent controls. A reference conformance probe MAY test observable environment, filesystem and network bypass paths.
+
+If an agent process calls an LLM provider directly, that provider is an explicit egress exception. A stronger deployment proxies model traffic through the BBM gateway as well.
+
+## 20. Database-scale data plane
+
+BBM/1 SHOULD scale with active agent interactions, not source-database cardinality.
+
+For structured data, classification SHOULD be schema/registry driven and MAY be compiled once per policy/schema version. Implementations SHOULD process row-level protection in bounded batches.
+
+For large analytical requests that do not require entity-level references, implementations SHOULD prefer source-side filtering, joins and aggregation so that only the minimal privacy-safe result crosses the Agent Boundary.
+
+BBM/1 does not define SQL generation or replace the source analytics engine. Query authorization and output protection remain mandatory regardless of where computation executes.

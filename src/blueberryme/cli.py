@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from pathlib import Path
@@ -12,8 +13,9 @@ from .policy import load_policy
 from .proxy import StructuredToolGuard, TargetAdapter
 from .references import MemorySourceAdapter
 from .runtime import BlueberryRuntime
+from .zone import ZoneProfile, run_agent as run_agent_in_zone, zone_check as run_zone_check, zone_check_summary
 
-app = typer.Typer(add_completion=False, help="BlueberryMe v0.3.1 reference runtime")
+app = typer.Typer(add_completion=False, help="BlueberryMe v0.4.0 reference runtime")
 
 
 def _policy_path() -> Path:
@@ -76,7 +78,6 @@ def demo() -> None:
     )
     typer.echo(f"\nMODEL-FACING TARGET RESPONSE: {response}")
 
-    # The same guarded call model can be submitted as a bounded async job.
     call2 = guard.authorize_tool_call(
         {"case": model_view["case"]},
         lease_id=lease_id,
@@ -116,6 +117,59 @@ def serve(host: str = "127.0.0.1", port: int = 8787) -> None:
     uvicorn.run("blueberryme.api:app", host=host, port=port, reload=False)
 
 
+@app.command("zone-check")
+def zone_check_cmd(
+    gateway_host: list[str] | None = typer.Option(None, "--gateway-host"),
+    llm_host: list[str] | None = typer.Option(None, "--llm-host"),
+    source_host: list[str] | None = typer.Option(None, "--source-host"),
+    target_host: list[str] | None = typer.Option(None, "--target-host"),
+    timeout: float = typer.Option(0.5, min=0.05, max=10.0),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Probe whether the current process zone has an obvious route around BBM."""
+    profile = ZoneProfile(
+        gateway_hosts=tuple(gateway_host or ()),
+        llm_hosts=tuple(llm_host or ()),
+        source_hosts=tuple(source_host or ()),
+        target_hosts=tuple(target_host or ()),
+    )
+    summary = zone_check_summary(run_zone_check(profile, timeout=timeout))
+    if json_output:
+        typer.echo(json.dumps(summary, indent=2, default=str))
+    else:
+        for probe in summary["probes"]:
+            typer.echo(f'{probe["status"]:>4}  {probe["name"]}: {probe["detail"]}')
+        typer.echo(f'BOUNDARY CONFORMANCE: {"PASS" if summary["pass"] else "FAIL"}')
+    if not summary["pass"]:
+        raise typer.Exit(code=1)
+
+
+@app.command("run-agent", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def run_agent_cmd(
+    ctx: typer.Context,
+    workspace: str = typer.Option(".", "--workspace"),
+    gateway_host: list[str] | None = typer.Option(None, "--gateway-host"),
+    llm_host: list[str] | None = typer.Option(None, "--llm-host"),
+    keep_env: list[str] | None = typer.Option(None, "--keep-env"),
+    srt_binary: str = typer.Option("srt", "--srt-binary"),
+) -> None:
+    """Run an agent command through Anthropic srt using a BBM restrictive profile."""
+    if not ctx.args:
+        raise typer.BadParameter("Provide the agent command after BBM options")
+    profile = ZoneProfile(
+        workspace=workspace,
+        gateway_hosts=tuple(gateway_host or ()),
+        llm_hosts=tuple(llm_host or ()),
+        keep_env=tuple(keep_env or ()),
+        srt_binary=srt_binary,
+    )
+    try:
+        code = run_agent_in_zone(profile, list(ctx.args))
+    except (RuntimeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    raise typer.Exit(code=code)
+
+
 @app.command("gen-token")
 def gen_token() -> None:
     """Print a fresh random gateway token (control or agent)."""
@@ -124,7 +178,7 @@ def gen_token() -> None:
 
 @app.command()
 def version() -> None:
-    typer.echo("0.3.1")
+    typer.echo("0.4.0")
 
 
 if __name__ == "__main__":

@@ -106,3 +106,16 @@ v0.3 does not claim to protect against:
 - inference from business facts the policy intentionally exposes to the model;
 - bypass paths deliberately left outside the deployment boundary;
 - complete quasi-identifier analysis across arbitrary external knowledge.
+
+
+### Generated-code bypass
+
+**Threat:** an agent writes Python/shell code or launches an MCP child that reads credentials, filesystem data or direct source routes outside the BBM path.
+
+**Control:** the whole process tree runs in the same constrained Agent Zone. v0.4 provides `zone-check` to probe the tested environment and a thin `srt` launcher as one reference boundary. BlueberryMe does not attempt to classify generated source code as safe or malicious.
+
+### Data-plane amplification
+
+**Threat:** millions of database rows are copied into the Agent Zone, creating unnecessary privacy exposure, state growth and latency even though the task only needs an aggregate.
+
+**Control:** schema-driven classification, bounded batches and source-side pushdown for aggregate analysis. Handles are emitted only for entities that actually need to cross the boundary.

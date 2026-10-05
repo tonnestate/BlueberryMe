@@ -10,9 +10,9 @@ BlueberryMe sits between sensitive business data and AI agents. Its design goal 
 
 > **The agent carries references, never values. Authority to resolve them is minted per call, outside the agent, and bound to one target and one operation.**
 
-BlueberryMe v0.3.1 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs in EU business environments. It is **not** a legal compliance certificate.
+BlueberryMe v0.4.0 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs in EU business environments. It is **not** a legal compliance certificate.
 
-## Why v0.3 is different
+## Why v0.3 was different
 
 v0.1/v0.2 proved reversible protection, leases, policy and safe degradation. v0.3 moves the differentiator into code:
 
@@ -30,6 +30,25 @@ v0.1/v0.2 proved reversible protection, leases, policy and safe degradation. v0.
 - **Double policy check for async.** Once at submit, once at execution.
 - **Value-drift check.** A source pointer can bind `row_version`; changed source data fails the item safely.
 - **Progressive async loading.** Optional expensive providers are lazy-loaded and see only the already protected view.
+
+## What v0.4.0 adds
+
+v0.4 moves non-bypassability and database-scale execution from deployment advice into explicit reference tooling.
+
+- **Execution Boundary conformance.** `blueberryme zone-check` probes credential environment, sensitive host paths, direct source/target routes, cloud metadata, arbitrary egress and approved gateway reachability.
+- **Lightweight sandbox launcher.** `blueberryme run-agent` is a thin adapter around Anthropic sandbox-runtime (`srt`). BlueberryMe defines and verifies the privacy property; it does not build a sandbox.
+- **Generated-code containment.** Python, shell scripts and child processes inherit the same execution boundary instead of being trusted to call BBM correctly.
+- **Explicit IDE boundary.** Terminal isolation does not magically constrain an IDE process; sensitive IDE use requires a conformant remote workspace/devcontainer/VM or a workspace without raw sensitive data.
+- **Compiled structured schemas.** Schema classification can be validated once and reused across large batches.
+- **Bounded batch protection.** Large row sets can be processed in fixed-size chunks without growing memory with database size.
+- **Aggregate pushdown planning.** For large analytical requests that do not require entity references, BBM recommends source-side filter/join/aggregate execution and returns only the reduced privacy-safe result.
+- **Scale invariant.** The Reference Store should grow with active agent references/jobs/capsules, not with every row in the source database.
+
+The v0.4 design rule is:
+
+> **Enforce synchronously, enrich asynchronously; push computation to the data; keep generated code inside the same constrained Agent Zone.**
+
+See [Execution Boundary](docs/EXECUTION-BOUNDARY.md) and [Data Plane](docs/DATA-PLANE.md).
 
 ## What v0.3.1 adds
 
@@ -334,6 +353,8 @@ The intent is a **simple data path with a hard privacy boundary**, not maximum c
 
 - [`docs/BBM-1.md`](docs/BBM-1.md) — protocol draft
 - [`docs/BOUNDARY.md`](docs/BOUNDARY.md) — enforcement and non-bypassability
+- [`docs/EXECUTION-BOUNDARY.md`](docs/EXECUTION-BOUNDARY.md) — generated-code containment and zone conformance
+- [`docs/DATA-PLANE.md`](docs/DATA-PLANE.md) — database-scale execution and pushdown
 - [`docs/ASYNC-JOBS.md`](docs/ASYNC-JOBS.md) — bounded async job model
 - [`docs/EU-BUSINESS-PROFILE.md`](docs/EU-BUSINESS-PROFILE.md) — EU business design profile
 - [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) — key threats and controls
