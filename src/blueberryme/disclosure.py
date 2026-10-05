@@ -435,10 +435,12 @@ class EgressGate:
 
         recipe_fields = {item.field: item for item in recipe.fields}
         protected = denied = aggregate = masked = raw = raw_sensitive = unknown = 0
+        revealed_rows = 0
         classes_seen: list[DataClass] = []
         output: list[dict[str, Any]] = []
 
         for record in records:
+            row_revealed = False
             if not isinstance(record, Mapping):
                 receipt = self._receipt(
                     decision=ReceiptDecision.BLOCKED,
@@ -502,11 +504,35 @@ class EgressGate:
                     out[field] = value
                     if value is not None and value != "":
                         raw += 1
+                        row_revealed = True
                         if data_class is not DataClass.PUBLIC:
                             raw_sensitive += 1
                     continue
                 denied += 1
+            if row_revealed:
+                revealed_rows += 1
             output.append(out)
+
+        if not self._reserve_reveal_rows(
+            lease_id=lease_id,
+            rule=rule,
+            purpose=purpose,
+            limit=purpose_rule.max_reveal_rows_per_lease,
+            rows=revealed_rows,
+        ):
+            receipt = self._receipt(
+                decision=ReceiptDecision.BLOCKED,
+                reason_code="BBM_REVEAL_BUDGET_EXHAUSTED",
+                path_coverage="VERIFIED",
+                dataset_id=str(recipe.dataset_id),
+                rule=rule,
+                surface=surface,
+                purpose=purpose,
+                operation=str(recipe.operation),
+                destination=str(recipe.destination),
+                rows_observed=len(records),
+            )
+            return EgressResult((), receipt)
 
         disclosed = raw > 0 or masked > 0
         receipt = self._receipt(
@@ -650,10 +676,12 @@ class EgressGate:
             return EgressResult((), receipt)
 
         protected = denied = aggregate = masked = raw = raw_sensitive = unknown = 0
+        revealed_rows = 0
         classes_seen: list[DataClass] = []
         output: list[dict[str, Any]] = []
 
         for record in records:
+            row_revealed = False
             out: dict[str, Any] = {}
             for field, value in record.items():
                 declared = schema.get(field, DataClass.UNKNOWN)
@@ -695,11 +723,35 @@ class EgressGate:
                     out[field] = value
                     if value is not None and value != "":
                         raw += 1
+                        row_revealed = True
                         if data_class is not DataClass.PUBLIC:
                             raw_sensitive += 1
                     continue
                 denied += 1
+            if row_revealed:
+                revealed_rows += 1
             output.append(out)
+
+        if not self._reserve_reveal_rows(
+            lease_id=lease_id,
+            rule=rule,
+            purpose=purpose,
+            limit=purpose_rule.max_reveal_rows_per_lease,
+            rows=revealed_rows,
+        ):
+            receipt = self._receipt(
+                decision=ReceiptDecision.BLOCKED,
+                reason_code="BBM_REVEAL_BUDGET_EXHAUSTED",
+                path_coverage="VERIFIED",
+                dataset_id=dataset_id,
+                rule=rule,
+                surface=surface,
+                purpose=purpose,
+                operation=operation,
+                destination=destination,
+                rows_observed=rows_observed,
+            )
+            return EgressResult((), receipt)
 
         disclosed = raw > 0 or masked > 0
         receipt = self._receipt(
