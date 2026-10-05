@@ -40,3 +40,14 @@ Every response that can reach the model must pass through response protection, i
 ## Logs and observability
 
 BlueberryMe normal audit is allowlist-structured. Deployment components before/inside the trusted boundary must disable body/prompt/DB statement logging where those logs could contain source values. Log redaction is defense in depth, not the primary privacy control.
+
+
+## v0.4 conformance tooling
+
+BlueberryMe v0.4 adds an Execution Boundary probe instead of pretending the Python library can make itself non-bypassable. `blueberryme zone-check` is intended to run inside the Agent Zone and test observable routes around the boundary. `blueberryme run-agent` can generate a restrictive profile for Anthropic sandbox-runtime, but srt is only a reference implementation.
+
+Generated Python, shell commands and local MCP children are not trusted. They must inherit the same filesystem, environment and network restrictions as the parent agent process.
+
+A terminal wrapper does not constrain built-in capabilities of a parent IDE. For sensitive IDE agents, the whole IDE/session must run in a conformant remote workspace/devcontainer/VM, or the workspace must not contain raw sensitive data.
+
+See [EXECUTION-BOUNDARY.md](EXECUTION-BOUNDARY.md).
