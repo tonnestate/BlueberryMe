@@ -292,12 +292,12 @@ The echo guard remains defense in depth for verbatim echoes; structured egress p
 2. [Selective Disclosure](docs/SELECTIVE-DISCLOSURE.md)
 3. [Privacy Compilation](docs/PRIVACY-COMPILER.md)
 4. [Execution Boundary](docs/EXECUTION-BOUNDARY.md)
-5. [Data Plane](docs/DATA-PLANE.md)
-6. [Async Jobs](docs/ASYNC-JOBS.md)
-7. [MCP Binding](docs/MCP-BINDING.md)
-8. [Threat Model](docs/THREAT-MODEL.md)
-9. [EU Business Profile](docs/EU-BUSINESS-PROFILE.md)
-10. [Host Capability Boundary](docs/HOST-CAPABILITY-BOUNDARY.md)
+5. [Host Capability Boundary](docs/HOST-CAPABILITY-BOUNDARY.md)
+6. [Data Plane](docs/DATA-PLANE.md)
+7. [Async Jobs](docs/ASYNC-JOBS.md)
+8. [MCP Binding](docs/MCP-BINDING.md)
+9. [Threat Model](docs/THREAT-MODEL.md)
+10. [EU Business Profile](docs/EU-BUSINESS-PROFILE.md)
 11. [Enterprise Roadmap](docs/ENTERPRISE-ROADMAP.md)
 
 ## License
