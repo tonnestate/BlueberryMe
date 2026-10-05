@@ -15,7 +15,7 @@ from .references import MemorySourceAdapter
 from .runtime import BlueberryRuntime
 from .zone import ZoneProfile, run_agent as run_agent_in_zone, zone_check as run_zone_check, zone_check_summary
 
-app = typer.Typer(add_completion=False, help="BlueberryMe v0.4.2 reference runtime")
+app = typer.Typer(add_completion=False, help="BlueberryMe v0.4.3 reference runtime")
 
 
 def _policy_path() -> Path:
@@ -178,7 +178,7 @@ def gen_token() -> None:
 
 @app.command()
 def version() -> None:
-    typer.echo("0.4.2")
+    typer.echo("0.4.3")
 
 
 if __name__ == "__main__":
