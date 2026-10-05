@@ -316,6 +316,20 @@ class BlueberryRuntime:
         lease = self._active_lease(lease_id)
         return lease.tenant_id, lease.agent_id
 
+    def lease_context(self, lease_id: str) -> dict[str, str]:
+        """Return authority context from the active lease for boundary components.
+
+        Callers should derive agent/purpose/scope from this context rather than accept
+        those authority fields from an untrusted request body.
+        """
+        lease = self._active_lease(lease_id)
+        return {
+            "tenant_id": lease.tenant_id,
+            "agent_id": lease.agent_id,
+            "purpose": lease.purpose,
+            "scope": lease.scope,
+        }
+
     def lease_operations(self, lease_id: str) -> dict[str, list[str]]:
         """Allowed target operations of an active lease (trusted-side helper)."""
         lease = self._active_lease(lease_id)
@@ -578,6 +592,33 @@ class BlueberryRuntime:
         with self._unit_of_work():
             protected = self._protect_without_validation(value, data_class, lease)
         return None if protected is _SUPPRESSED else protected
+
+    def protect_value_as_handle(
+        self,
+        value: Any,
+        data_class: DataClass,
+        lease_id: str,
+        *,
+        origin_scope: str | None = None,
+    ) -> Any:
+        """Force an opaque lease-local handle for an egress decision.
+
+        Dataset/egress policy may be stricter than the base class policy. This method
+        therefore does not permit an ALLOW rule in the base policy to leak a value when
+        the egress gate explicitly chose HANDLE.
+        """
+        if value is None or value == "":
+            return value
+        lease = self._active_lease(lease_id)
+        with self._unit_of_work():
+            handle = self._store_capsule(
+                value,
+                lease=lease,
+                data_class=data_class,
+                origin_scope=origin_scope or lease.scope,
+            )
+            self._audit_event("EGRESS", lease, data_class=data_class, decision="HANDLE")
+            return handle
 
     def _protect_source_locked(
         self, reference: SourceReference, data_class: DataClass, lease: Lease, origin_scope: str | None

@@ -83,8 +83,13 @@ def _quality(raw: dict[str, Any] | None, default: QualityPolicy | None = None) -
     )
 
 
+def load_policy_document(path: str | Path) -> dict[str, Any]:
+    """Return the fully inherited policy document for extension modules."""
+    return _load_raw(Path(path))
+
+
 def load_policy(path: str | Path) -> Policy:
-    raw = _load_raw(Path(path))
+    raw = load_policy_document(path)
     default_quality = _quality(raw.get("quality"))
     default_linkability = Linkability(raw.get("default_linkability", "LEASE"))
     classes: dict[DataClass, ClassPolicy] = {}
@@ -120,7 +125,7 @@ def load_policy(path: str | Path) -> Policy:
         )
 
     return Policy(
-        version=str(raw.get("version", "BBM/1-draft-0.3")),
+        version=str(raw.get("version", "BBM/1-draft-0.4")),
         strict_structured_data=bool(raw.get("strict_structured_data", True)),
         default_action=Transform(raw.get("default_action", "DENY")),
         unknown_field_action=QualityAction(raw.get("unknown_field_action", "PROTECT")),

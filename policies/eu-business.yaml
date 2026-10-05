@@ -1,5 +1,5 @@
 extends: base.yaml
-version: BBM/1-draft-0.3
+version: BBM/1-draft-0.4
 
 quality:
   accepted_birth_date_formats:
@@ -73,3 +73,57 @@ flows:
       TELEPHONY: ["CALL"]
       PAYMENT_SERVICE: ["PAY"]
       GITHUB: ["WRITE_REPO"]
+
+
+# Dataset-context policy is evaluated at the agent egress boundary. It can be
+# stricter or more purpose-specific than the generic data-class policy.
+datasets:
+  - id: HR_EMPLOYEE
+    match: "HR.*"
+    risk: HIGH
+    default_action: DENY
+    purposes:
+      SQL_DEBUGGING:
+        operations: ["READ_GRID", "GetGridResults"]
+        destinations: ["LUNA", "AGENT:*"]
+        agents: ["*"]
+        lease_scopes: ["SQL:*", "HR:*"]
+        max_rows: 100
+        default_action: HANDLE
+        fields:
+          "*salary*": AGGREGATE
+          "*Salary*": AGGREGATE
+          "*iban*": DENY
+          "*IBAN*": DENY
+          "*bank*": DENY
+          "*Bank*": DENY
+          "*health*": DENY
+          "*Health*": DENY
+        classes:
+          PERSON: HANDLE
+          EMAIL: HANDLE
+          PHONE: HANDLE
+          ADDRESS: HANDLE
+          BIRTH_DATE: HANDLE
+          IBAN: DENY
+          HEALTH_DATA: DENY
+          SECRET: DENY
+          PUBLIC: HANDLE
+          UNKNOWN: HANDLE
+
+      PAYROLL_SUPPORT:
+        operations: ["READ_GRID", "GetGridResults"]
+        destinations: ["LUNA", "AGENT:*"]
+        agents: ["*"]
+        lease_scopes: ["EMPLOYEE:*"]
+        max_rows: 1
+        default_action: DENY
+        fields:
+          "*salary*": REVEAL
+          "*Salary*": REVEAL
+        classes:
+          PERSON: REVEAL
+          IBAN: REVEAL
+          PUBLIC: REVEAL
+          HEALTH_DATA: DENY
+          SECRET: DENY
