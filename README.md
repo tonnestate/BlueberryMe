@@ -21,13 +21,13 @@ BlueberryMe combines four enforcement layers:
 3. **Resolution Boundary** — plaintext can exist only in a trusted target path under a signed per-call Resolution Intent.
 4. **Execution Boundary** — generated code, shell commands and local tools must not have an alternate path around BBM.
 
-v0.4.1 added **purpose-bound selective disclosure** at the structured-data egress boundary. v0.4.2 now adds **privacy compilation** so repeated classification does not scale with database cardinality.
+v0.4.1 added **purpose-bound selective disclosure** at the structured-data egress boundary. v0.4.2 added **privacy compilation** so repeated classification does not scale with database cardinality. v0.4.3 hardens key custody and raw-disclosure authority.
 
 ## v0.4.3 — Hardening
 
 v0.4.3 tightens production defaults without adding another subsystem.
 
-- **Persistent keys fail closed.** Persistent state now requires `BBM_MASTER_KEY_B64` or an existing `BBM_MASTER_KEY_FILE`. Creating `master.key` beside the state database is permitted only with `BBM_DEV_MODE=1`.
+- **Persistent keys fail closed.** Persistent state now requires `BBM_MASTER_KEY_B64` or an existing `BBM_MASTER_KEY_FILE` outside the state directory. Creating `master.key` beside the state database is permitted only with `BBM_DEV_MODE=1`.
 - **Sensitive `REVEAL` needs a concrete agent.** Wildcard agent identities are rejected when a policy can reveal sensitive values.
 - **Sensitive `REVEAL` needs a lease budget.** `max_reveal_rows_per_lease` prevents repeated one-row calls from bypassing `max_rows`.
 - **Reference payroll policy is narrow.** The example allows disclosure only to the concrete `luna-payroll` agent and one revealed row per lease.
