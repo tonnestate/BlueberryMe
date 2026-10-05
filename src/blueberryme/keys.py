@@ -19,12 +19,34 @@ def _decode_env_key(value: str) -> bytes:
 
 
 def load_or_create_master_key(state_dir: str | Path) -> bytes:
+    """Load persistent master key material.
+
+    Production/default mode is fail-closed: key material must be supplied outside
+    the state directory through BBM_MASTER_KEY_B64 or an existing
+    BBM_MASTER_KEY_FILE. Local key creation beside the state database is allowed
+    only when BBM_DEV_MODE=1 is explicitly set.
+    """
     env = os.environ.get("BBM_MASTER_KEY_B64")
     if env:
         return _decode_env_key(env.strip())
 
     explicit = os.environ.get("BBM_MASTER_KEY_FILE")
-    path = Path(explicit) if explicit else Path(state_dir) / "master.key"
+    if explicit:
+        path = Path(explicit)
+        if not path.exists():
+            raise RuntimeError("BBM_MASTER_KEY_FILE does not exist")
+        raw = path.read_bytes()
+        if len(raw) != 32:
+            raise ValueError("BlueberryMe master key file must contain exactly 32 bytes")
+        return raw
+
+    if os.environ.get("BBM_DEV_MODE") != "1":
+        raise RuntimeError(
+            "Persistent BlueberryMe state requires BBM_MASTER_KEY_B64 or an existing "
+            "BBM_MASTER_KEY_FILE. Set BBM_DEV_MODE=1 only for local development."
+        )
+
+    path = Path(state_dir) / "master.key"
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         raw = path.read_bytes()
