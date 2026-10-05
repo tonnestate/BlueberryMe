@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.3 — 2026-10-05
+
+Hardening release.
+
+### Key custody
+
+- Persistent runtime startup now fails closed unless `BBM_MASTER_KEY_B64` or an existing
+  `BBM_MASTER_KEY_FILE` outside the state directory is configured.
+- Automatic creation of `master.key` beside the state database is restricted to
+  explicit `BBM_DEV_MODE=1`.
+
+### Selective disclosure
+
+- Sensitive `REVEAL` policies reject wildcard agent identities.
+- Sensitive `REVEAL` requires `max_reveal_rows_per_lease`.
+- Reveal-row budget is reserved atomically and persists across repeated calls on one
+  lease; rejected reservations consume no budget.
+- The reference `PAYROLL_SUPPORT` policy is bound to `luna-payroll` and one revealed
+  row per lease.
+- Compiled and non-compiled egress use the same lease-scoped reveal budget.
+
+### Architecture
+
+- Privacy compilation is documented as an optional runtime capability rather than a
+  prerequisite for the BBM core path.
+- Gateway/package version strings aligned with 0.4.3.
+
+### Tests
+
+- Added regression coverage for production key fail-closed behavior, development-key
+  creation, external key-file behavior, wildcard reveal rejection, mandatory reveal
+  budget, repeated-call budget exhaustion and agent binding.
+
+
 ## 0.4.2 — 2026-10-05
 
 Privacy-compilation release.

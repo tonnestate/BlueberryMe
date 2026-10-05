@@ -6,11 +6,11 @@
 
 **Open Agent Privacy Protocol & Sensitive Data Bypass Runtime.**
 
-BlueberryMe keeps identity, secrets and raw sensitive values out of AI-agent context unless a specific purpose explicitly authorizes disclosure.
+BlueberryMe keeps identity, secrets and raw sensitive values out of AI-agent context unless an explicitly authorized, policy-bound disclosure is permitted and recorded by a Privacy Receipt.
 
 > **The agent carries references, never values. Authority to resolve them is minted per call, outside the agent, and bound to one target and one operation.**
 
-BlueberryMe v0.4.2 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs. It is **not** a legal compliance certificate.
+BlueberryMe v0.4.3 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs. It is **not** a legal compliance certificate.
 
 ## Current architecture
 
@@ -21,11 +21,25 @@ BlueberryMe combines four enforcement layers:
 3. **Resolution Boundary** — plaintext can exist only in a trusted target path under a signed per-call Resolution Intent.
 4. **Execution Boundary** — generated code, shell commands and local tools must not have an alternate path around BBM.
 
-v0.4.1 added **purpose-bound selective disclosure** at the structured-data egress boundary. v0.4.2 now adds **privacy compilation** so repeated classification does not scale with database cardinality.
+v0.4.1 added **purpose-bound selective disclosure** at the structured-data egress boundary. v0.4.2 added **privacy compilation** so repeated classification does not scale with database cardinality. v0.4.3 hardens key custody and raw-disclosure authority.
+
+## v0.4.3 — Hardening
+
+v0.4.3 tightens production defaults without adding another subsystem.
+
+- **Persistent keys fail closed.** Persistent state now requires `BBM_MASTER_KEY_B64` or an existing `BBM_MASTER_KEY_FILE` outside the state directory. Creating `master.key` beside the state database is permitted only with `BBM_DEV_MODE=1`.
+- **Sensitive `REVEAL` needs a concrete agent.** Wildcard agent identities are rejected when a policy can reveal sensitive values.
+- **Sensitive `REVEAL` needs a lease budget.** `max_reveal_rows_per_lease` prevents repeated one-row calls from bypassing `max_rows`.
+- **Reference payroll policy is narrow.** The example allows disclosure only to the concrete `luna-payroll` agent and one revealed row per lease.
+- **Compiler remains optional in the execution path.** Handles, leases, intents, jobs and selective disclosure work without invoking the Privacy Compiler.
+
+Core invariant:
+
+> **No plaintext reaches the agent without an explicitly authorized, bounded and receipted disclosure.**
 
 ## v0.4.2 — Compile once, enforce many
 
-The new `PrivacyRecipeCompiler` uses an escalating graph:
+The optional `PrivacyRecipeCompiler` capability uses an escalating graph:
 
 ```text
 compiled recipe
@@ -227,12 +241,17 @@ blueberryme demo
 
 HTTP gateway:
 
+Persistent gateway mode requires master-key material outside the state directory:
+
 ```bash
 pip install -e .[api]
+export BBM_MASTER_KEY_B64="<32-byte key from your secret manager, URL-safe base64>"
 export BBM_CONTROL_TOKEN="$(blueberryme gen-token)"
 export BBM_AGENT_TOKENS="agent-a=$(blueberryme gen-token)"
 blueberryme serve
 ```
+
+For local development only, `BBM_DEV_MODE=1` permits BlueberryMe to create `.blueberryme/master.key` beside the local state database.
 
 ## Reference implementation limits
 

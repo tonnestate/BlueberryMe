@@ -1,10 +1,10 @@
-# Selective Disclosure and Egress Receipts — v0.4.1
+# Selective Disclosure and Egress Receipts — v0.4.3
 
 BlueberryMe v0.4.1 adds a dataset-context egress gate for structured result surfaces.
 
 The objective is not "never disclose anything". It is:
 
-> Disclose only what the active purpose, dataset, scope, operation and destination explicitly authorize.
+> Disclose only what the active purpose, dataset, scope, operation and destination explicitly authorize, and record every raw disclosure as an `AUTHORIZED_DISCLOSURE` receipt.
 
 A technically readable field is not automatically an authorized disclosure.
 
@@ -38,6 +38,20 @@ x field/data class
 The agent, purpose and scope are derived from the active BBM lease. They are not accepted as caller-provided authority fields.
 
 An unregistered dataset is fail-closed with `BBM_DATASET_CLASSIFICATION_REQUIRED`.
+
+## Reveal hardening
+
+Raw `REVEAL` is an explicit exception to the default protected path.
+
+For sensitive `REVEAL`, the reference policy loader requires:
+
+- concrete agent ids (wildcard agent identities are rejected);
+- a positive `max_reveal_rows_per_lease` budget;
+- an otherwise valid purpose, operation, destination and lease scope.
+
+`max_rows` limits one call. `max_reveal_rows_per_lease` limits cumulative raw-disclosure rows across repeated calls on the same lease. The reservation is atomic in the reference state backend, and a rejected reservation does not consume budget.
+
+The reference `PAYROLL_SUPPORT` example is intentionally bound to `luna-payroll` and one revealed row per lease.
 
 ## Privacy Receipt
 
@@ -96,7 +110,8 @@ For `SQL_DEBUGGING`:
 For `PAYROLL_SUPPORT`:
 
 - only an `EMPLOYEE:*` scoped lease is accepted;
-- at most one employee row may be released;
+- only the concrete `luna-payroll` agent is accepted;
+- at most one employee row may be revealed across the entire lease;
 - PERSON/IBAN/public fields and salary-like fields may be explicitly revealed;
 - health data and secrets remain denied.
 

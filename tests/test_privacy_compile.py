@@ -189,3 +189,38 @@ def test_forged_compiled_recipe_cannot_widen_disclosure():
     assert result.receipt.decision is ReceiptDecision.VERIFIED_PROTECTED
     assert result.receipt.raw_sensitive_values_released == 0
     assert "IBAN" not in result.records[0]
+
+
+def test_compiled_reveal_budget_is_shared_across_calls():
+    _, runtime, datasets, compiler = _parts()
+    compiled = compiler.get_or_compile(
+        {"name": DataClass.PERSON},
+        dataset_id="HR.PROD.dbo.Employee",
+        purpose="PAYROLL_SUPPORT",
+        operation="GetGridResults",
+        destination="LUNA",
+    ).recipe
+    lease = runtime.create_lease(
+        tenant_id="bank",
+        agent_id="luna-payroll",
+        purpose="PAYROLL_SUPPORT",
+        scope="EMPLOYEE:4711",
+    )
+    gate = EgressGate(runtime, datasets)
+
+    first = gate.protect_compiled_grid(
+        [{"name": "Alice Example"}],
+        lease,
+        recipe=compiled,
+        surface="SSMS:GetGridResults",
+    )
+    second = gate.protect_compiled_grid(
+        [{"name": "Alice Example"}],
+        lease,
+        recipe=compiled,
+        surface="SSMS:GetGridResults",
+    )
+
+    assert first.receipt.decision is ReceiptDecision.AUTHORIZED_DISCLOSURE
+    assert second.records == ()
+    assert second.receipt.reason_code == "BBM_REVEAL_BUDGET_EXHAUSTED"

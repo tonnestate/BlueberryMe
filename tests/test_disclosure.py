@@ -188,3 +188,97 @@ datasets:
 
     with pytest.raises(ValueError):
         load_dataset_policies(path)
+
+
+def test_sensitive_reveal_requires_concrete_agent(tmp_path):
+    path = tmp_path / "unsafe-agent.yaml"
+    path.write_text(
+        """
+version: BBM/1-draft-0.4
+datasets:
+  - id: hr
+    match: "HR.*"
+    default_action: DENY
+    purposes:
+      PAYROLL_SUPPORT:
+        agents: ["*"]
+        lease_scopes: ["EMPLOYEE:*"]
+        max_reveal_rows_per_lease: 1
+        classes:
+          IBAN: REVEAL
+""",
+        encoding="utf-8",
+    )
+    import pytest
+
+    with pytest.raises(ValueError):
+        load_dataset_policies(path)
+
+
+def test_sensitive_reveal_requires_lease_budget(tmp_path):
+    path = tmp_path / "unsafe-budget.yaml"
+    path.write_text(
+        """
+version: BBM/1-draft-0.4
+datasets:
+  - id: hr
+    match: "HR.*"
+    default_action: DENY
+    purposes:
+      PAYROLL_SUPPORT:
+        agents: ["luna-payroll"]
+        lease_scopes: ["EMPLOYEE:*"]
+        classes:
+          IBAN: REVEAL
+""",
+        encoding="utf-8",
+    )
+    import pytest
+
+    with pytest.raises(ValueError):
+        load_dataset_policies(path)
+
+
+def test_reveal_budget_is_per_lease_not_per_call():
+    runtime, gate = _runtime_and_gate()
+    lease = runtime.create_lease(
+        tenant_id="bank",
+        agent_id="luna-payroll",
+        purpose="PAYROLL_SUPPORT",
+        scope="EMPLOYEE:4711",
+    )
+    args = dict(
+        schema={"name": DataClass.PERSON},
+        lease_id=lease,
+        dataset_id="HR.PROD.dbo.Employee",
+        operation="GetGridResults",
+        destination="LUNA",
+    )
+
+    first = gate.protect_grid([{"name": "Alice Example"}], **args)
+    second = gate.protect_grid([{"name": "Alice Example"}], **args)
+
+    assert first.receipt.decision is ReceiptDecision.AUTHORIZED_DISCLOSURE
+    assert second.records == ()
+    assert second.receipt.decision is ReceiptDecision.BLOCKED
+    assert second.receipt.reason_code == "BBM_REVEAL_BUDGET_EXHAUSTED"
+
+
+def test_payroll_reveal_rejects_other_agent():
+    runtime, gate = _runtime_and_gate()
+    lease = runtime.create_lease(
+        tenant_id="bank",
+        agent_id="other-agent",
+        purpose="PAYROLL_SUPPORT",
+        scope="EMPLOYEE:4711",
+    )
+    result = gate.protect_grid(
+        [{"name": "Alice Example"}],
+        {"name": DataClass.PERSON},
+        lease,
+        dataset_id="HR.PROD.dbo.Employee",
+        operation="GetGridResults",
+        destination="LUNA",
+    )
+    assert result.records == ()
+    assert result.receipt.reason_code == "BBM_DATASET_AGENT_DENIED"

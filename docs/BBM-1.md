@@ -1,6 +1,6 @@
 # BBM/1 — Agent Privacy Protocol
 
-Status: **experimental draft 0.4** (reference implementation 0.4.2).
+Status: **experimental draft 0.4** (reference implementation 0.4.3).
 
 ## 1. Objective
 
@@ -334,6 +334,16 @@ Post-hoc masking after an agent/harness has already received plaintext does not 
 Host-specific tools may bind to this contract, but BBM/1 does not standardize a particular SSMS, IDE or
 grid-reader function name.
 
+### 21.3 Reveal budgets and concrete principals
+
+Raw `REVEAL` is a privileged disclosure action, not the default representation.
+
+For sensitive classes, a reference policy SHOULD bind `REVEAL` to concrete agent identities rather than wildcard principals. Implementations SHOULD reject policies that combine sensitive `REVEAL` with unconstrained agent wildcards.
+
+A per-call row limit is insufficient by itself because repeated calls can accumulate disclosure. A conformant high-safety profile SHOULD also enforce a lease-scoped cumulative reveal budget. Budget reservation MUST occur before model-visible release and SHOULD be atomic across workers sharing the same state backend.
+
+A rejected budget reservation MUST NOT release the candidate payload and SHOULD NOT consume budget.
+
 
 ## 22. Privacy compilation
 
@@ -366,3 +376,12 @@ Fields absent from the compiled surface MUST fail closed until the surface is re
 policy handles the change.
 
 Implementations SHOULD use exact-context recipe dispatch rather than scanning a global recipe corpus.
+
+
+## 23. Persistent key custody
+
+Persistent encrypted state is only as strong as its master-key custody.
+
+A production/default deployment MUST NOT silently create its persistent master key beside the state database. Key material SHOULD come from an external secret manager, KMS/HSM integration, injected environment secret, or an existing key file outside the state directory.
+
+A reference implementation MAY create a local key beside the state database only under an explicit development-mode switch. Without configured persistent key material, production startup MUST fail closed.
