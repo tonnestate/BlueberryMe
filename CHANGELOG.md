@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.4 — 2026-10-05
+
+Lightweight boundary-consolidation release.
+
+### Host capability boundary
+
+- Added a declarative host-capability manifest for privileged functions exposed by IDEs,
+  SSMS-like hosts, browsers and other parent applications.
+- Unmediated sensitive host capabilities are a hard FAIL.
+- Structured sensitive surfaces may declare `BBM_STRUCTURED` mediation before agent ingress.
+- Added explicit coverage for a `GetGridResults`-style result reader.
+
+### Free-text egress
+
+- Added conservative host free-text modes: `DENY`, opaque
+  `BBM_FREE_TEXT_HANDLE`, and explicit `BBM_FREE_TEXT_SCAN`.
+- Detector-based scan mode is marked as detector-bounded `AUTHORIZED_DISCLOSURE`,
+  never zero-disclosure proof.
+- Free-text mediation persists payload-free Privacy Receipts; scan receipts explicitly
+  record detector-bounded coverage.
+- No new NLP/LLM subsystem was added; the scan path reuses the existing detector.
+
+### Reliability and tests
+
+- Added reveal-budget persistence coverage across runtime restart.
+- Added shared-SQLite concurrency coverage for reveal budgets.
+- Added privacy-recipe fast-path persistence coverage across runtime restart.
+- Added host-boundary and free-text regression tests.
+- Added GitHub Actions CI for Python 3.11, 3.12 and 3.13 with compile and full pytest runs.
+
+### Core minimality
+
+- Documented the rule that adapters, providers and policy belong outside the mandatory core
+  execution path when they can be expressed independently.
+- Privacy compilation remains optional for execution.
+
+
 ## 0.4.3 — 2026-10-05
 
 Hardening release.

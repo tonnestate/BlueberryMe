@@ -10,7 +10,7 @@ BlueberryMe keeps identity, secrets and raw sensitive values out of AI-agent con
 
 > **The agent carries references, never values. Authority to resolve them is minted per call, outside the agent, and bound to one target and one operation.**
 
-BlueberryMe v0.4.3 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs. It is **not** a legal compliance certificate.
+BlueberryMe v0.4.4 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs. It is **not** a legal compliance certificate.
 
 ## Current architecture
 
@@ -21,7 +21,25 @@ BlueberryMe combines four enforcement layers:
 3. **Resolution Boundary** — plaintext can exist only in a trusted target path under a signed per-call Resolution Intent.
 4. **Execution Boundary** — generated code, shell commands and local tools must not have an alternate path around BBM.
 
-v0.4.1 added **purpose-bound selective disclosure** at the structured-data egress boundary. v0.4.2 added **privacy compilation** so repeated classification does not scale with database cardinality. v0.4.3 hardens key custody and raw-disclosure authority.
+v0.4.1 added **purpose-bound selective disclosure** at the structured-data egress boundary. v0.4.2 added **privacy compilation** so repeated classification does not scale with database cardinality. v0.4.3 hardened key custody and raw-disclosure authority. v0.4.4 consolidates the host boundary, free-text handling and repeatable CI without adding a new platform layer.
+
+## v0.4.4 — Boundary consolidation
+
+v0.4.4 closes the remaining core-boundary gaps while keeping BlueberryMe small.
+
+- **Host Capability Boundary.** Agent-visible host functions such as grid readers, IDE file/search APIs, clipboard readers or browser extractors must be denied or mediated before agent ingress.
+- **SSMS-style grid readers.** A raw `GetGridResults`-like capability is explicitly non-conformant unless its result is routed through BBM first.
+- **Conservative free text.** High-assurance mode is `DENY`; whole text may instead cross as an opaque handle. Detector-based scan mode is available only as bounded assurance and is never reported as zero-disclosure proof.
+- **Restart/concurrency coverage.** Reveal budgets and compiled privacy recipes are exercised across persistent-runtime restarts, and reveal budgets are tested under shared-state concurrency.
+- **Repeatable CI.** GitHub Actions runs compile checks and the full pytest suite on Python 3.11, 3.12 and 3.13.
+
+Design rule:
+
+> **No feature enters BBM Core if it can be expressed as an adapter, provider or policy.**
+
+The Privacy Compiler, Presidio, sandbox-runtime and host integrations remain optional capabilities around the stable core.
+
+See [Host Capability Boundary](docs/HOST-CAPABILITY-BOUNDARY.md).
 
 ## v0.4.3 — Hardening
 
@@ -274,12 +292,13 @@ The echo guard remains defense in depth for verbatim echoes; structured egress p
 2. [Selective Disclosure](docs/SELECTIVE-DISCLOSURE.md)
 3. [Privacy Compilation](docs/PRIVACY-COMPILER.md)
 4. [Execution Boundary](docs/EXECUTION-BOUNDARY.md)
-5. [Data Plane](docs/DATA-PLANE.md)
-6. [Async Jobs](docs/ASYNC-JOBS.md)
-7. [MCP Binding](docs/MCP-BINDING.md)
-8. [Threat Model](docs/THREAT-MODEL.md)
-9. [EU Business Profile](docs/EU-BUSINESS-PROFILE.md)
-10. [Enterprise Roadmap](docs/ENTERPRISE-ROADMAP.md)
+5. [Host Capability Boundary](docs/HOST-CAPABILITY-BOUNDARY.md)
+6. [Data Plane](docs/DATA-PLANE.md)
+7. [Async Jobs](docs/ASYNC-JOBS.md)
+8. [MCP Binding](docs/MCP-BINDING.md)
+9. [Threat Model](docs/THREAT-MODEL.md)
+10. [EU Business Profile](docs/EU-BUSINESS-PROFILE.md)
+11. [Enterprise Roadmap](docs/ENTERPRISE-ROADMAP.md)
 
 ## License
 

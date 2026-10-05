@@ -1,6 +1,6 @@
 # BBM/1 — Agent Privacy Protocol
 
-Status: **experimental draft 0.4** (reference implementation 0.4.3).
+Status: **experimental draft 0.4** (reference implementation 0.4.4).
 
 ## 1. Objective
 
@@ -385,3 +385,22 @@ Persistent encrypted state is only as strong as its master-key custody.
 A production/default deployment MUST NOT silently create its persistent master key beside the state database. Key material SHOULD come from an external secret manager, KMS/HSM integration, injected environment secret, or an existing key file outside the state directory.
 
 A reference implementation MAY create a local key beside the state database only under an explicit development-mode switch. Without configured persistent key material, production startup MUST fail closed.
+
+
+## 24. Host capability boundary
+
+A host-provided capability that can materialize sensitive values for an agent is part of the Agent Boundary, regardless of whether the capability uses the network.
+
+An enabled sensitive capability MUST either be denied or route its result through a compatible BBM mediation path before agent ingress. Post-hoc protection after the agent/harness has already received plaintext is non-conformant.
+
+Structured result surfaces SHOULD use structured egress mediation. Free-text surfaces SHOULD default to denial or opaque-handle release in high-assurance profiles.
+
+Detector-based free-text scanning MAY be provided as an explicit adapter mode, but it MUST be described as detector-bounded authorized disclosure and MUST NOT be represented as proof of zero sensitive disclosure.
+
+A host capability manifest is deployment evidence, not automatic discovery. Undeclared privileged host APIs remain outside the attested boundary.
+
+## 25. Core minimality
+
+BBM/1 separates core privacy invariants from optional adapters and providers.
+
+Features that can be expressed as a host adapter, detector, state provider, key provider, sandbox integration or policy SHOULD remain outside the mandatory core execution path. Privacy compilation is optional; direct selective disclosure remains conformant without it.

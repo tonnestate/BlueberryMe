@@ -224,3 +224,35 @@ def test_compiled_reveal_budget_is_shared_across_calls():
     assert first.receipt.decision is ReceiptDecision.AUTHORIZED_DISCLOSURE
     assert second.records == ()
     assert second.receipt.reason_code == "BBM_REVEAL_BUDGET_EXHAUSTED"
+
+
+def test_compiled_recipe_survives_runtime_restart(tmp_path):
+    policy = load_policy("policies/eu-business.yaml")
+    datasets = load_dataset_policies("policies/eu-business.yaml")
+    db = tmp_path / "state.db"
+    key = b"P" * 32
+    schema = {"name": DataClass.PERSON, "IBAN": DataClass.IBAN}
+
+    r1 = BlueberryRuntime(policy, state_path=db, master_key=key)
+    c1 = PrivacyRecipeCompiler(r1, policy, datasets)
+    first = c1.get_or_compile(
+        schema,
+        dataset_id="HR.PROD.dbo.Employee",
+        purpose="SQL_DEBUGGING",
+        operation="GetGridResults",
+        destination="LUNA",
+    )
+    assert first.cache_hit is False
+
+    r2 = BlueberryRuntime(policy, state_path=db, master_key=key)
+    c2 = PrivacyRecipeCompiler(r2, policy, datasets)
+    second = c2.get_or_compile(
+        schema,
+        dataset_id="HR.PROD.dbo.Employee",
+        purpose="SQL_DEBUGGING",
+        operation="GetGridResults",
+        destination="LUNA",
+    )
+
+    assert second.cache_hit is True
+    assert second.recipe.recipe_id == first.recipe.recipe_id

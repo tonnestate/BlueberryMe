@@ -11,6 +11,16 @@ from .disclosure import (
     ReceiptDecision,
     load_dataset_policies,
 )
+from .host_boundary import (
+    FreeTextEgressResult,
+    HostCapability,
+    HostCapabilityCheck,
+    HostMediation,
+    HostSurface,
+    evaluate_host_capabilities,
+    host_check_summary,
+    mediate_free_text,
+)
 from .jobs import AsyncJobGateway
 from .models import DataClass, FailureClass, Linkability, QualityAction, SourceReference, Transform
 from .privacy_compile import (
@@ -29,6 +39,8 @@ from .zone import ProbeStatus, ZoneProbe, ZoneProfile, build_srt_settings, zone_
 
 __all__ = [
     "BlueberryRuntime", "StructuredToolGuard", "TargetAdapter", "AsyncJobGateway",
+    "HostCapability", "HostCapabilityCheck", "HostMediation", "HostSurface",
+    "FreeTextEgressResult", "evaluate_host_capabilities", "host_check_summary", "mediate_free_text",
     "AsyncPrivacyPipeline", "AsyncProviderRegistry", "MemorySourceAdapter",
     "CallbackSourceAdapter", "MemoryStateBackend", "SQLiteStateBackend",
     "SourceReference", "DataClass", "Transform", "Linkability", "QualityAction",
@@ -41,4 +53,4 @@ __all__ = [
     "ProbeStatus", "ZoneProbe", "ZoneProfile", "build_srt_settings",
     "zone_check", "zone_check_summary",
 ]
-__version__ = "0.4.3"
+__version__ = "0.4.4"

@@ -1,4 +1,4 @@
-# Threat model — v0.3.1
+# Threat model — v0.4.4
 
 ## Primary assets
 
@@ -119,3 +119,16 @@ v0.3 does not claim to protect against:
 **Threat:** millions of database rows are copied into the Agent Zone, creating unnecessary privacy exposure, state growth and latency even though the task only needs an aggregate.
 
 **Control:** schema-driven classification, bounded batches and source-side pushdown for aggregate analysis. Handles are emitted only for entities that actually need to cross the boundary.
+
+
+### Host capability bypass
+
+**Threat:** an embedded agent cannot reach the source directly, but the host application exposes a native grid/file/clipboard/browser function that returns raw sensitive values to the agent.
+
+**Control:** the host capability inventory is part of deployment conformance. Enabled sensitive capabilities must be denied or BBM-mediated before agent ingress. Unmediated sensitive capabilities are a hard boundary failure.
+
+### Free-text semantic leakage
+
+**Threat:** a response contains sensitive information in transformed, partial or previously unseen free text that a deterministic echo guard does not recognize.
+
+**Control:** high-assurance deployments deny free-text egress or replace the whole text with an opaque handle. Optional detector-based scanning is explicitly classified as detector-bounded authorized disclosure, never as zero-disclosure proof.
