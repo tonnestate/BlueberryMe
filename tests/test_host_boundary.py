@@ -63,19 +63,39 @@ def test_free_text_deny_releases_nothing(runtime, lease):
 
 def test_free_text_handle_releases_no_text_semantics(runtime, lease):
     raw = "sensitive narrative"
-    result = mediate_free_text(runtime, raw, lease, mode=HostMediation.BBM_FREE_TEXT_HANDLE)
+    result = mediate_free_text(
+        runtime,
+        raw,
+        lease,
+        mode=HostMediation.BBM_FREE_TEXT_HANDLE,
+        capability="ReadEditorText",
+    )
     assert raw not in result.value
     assert result.value.startswith("BBM1H.UNKNOWN.")
     assert result.decision is ReceiptDecision.VERIFIED_PROTECTED
+    assert result.receipt.reason_code == "BBM_FREE_TEXT_HANDLED"
+    assert runtime.secure_state.get_json("privacy-receipt", result.receipt.receipt_id) is not None
     assert result.detector_bounded is False
 
 
 def test_free_text_scan_never_claims_zero_disclosure(runtime, lease):
     raw = "Contact max.mustermann@example.de about the case."
-    result = mediate_free_text(runtime, raw, lease, mode=HostMediation.BBM_FREE_TEXT_SCAN)
+    result = mediate_free_text(
+        runtime,
+        raw,
+        lease,
+        mode=HostMediation.BBM_FREE_TEXT_SCAN,
+        capability="ReadEditorText",
+    )
     assert "max.mustermann@example.de" not in result.value
     assert "BBM1H.EMAIL." in result.value
     assert result.decision is ReceiptDecision.AUTHORIZED_DISCLOSURE
+    assert result.receipt.reason_code == "BBM_FREE_TEXT_SCANNED_DISCLOSURE"
+    assert result.receipt.path_coverage == "DETECTOR_BOUNDED"
+    assert result.receipt.raw_sensitive_values_released == 1
+    stored = runtime.secure_state.get_json("privacy-receipt", result.receipt.receipt_id)
+    assert stored is not None
+    assert "max.mustermann@example.de" not in str(stored)
     assert result.detector_bounded is True
 
 
