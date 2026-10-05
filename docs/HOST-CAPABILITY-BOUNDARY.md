@@ -35,6 +35,11 @@ Supported mediation modes are:
 
 An unmediated sensitive capability is a hard FAIL.
 
+Two declaration rules keep the evaluator fail-closed (v0.4.5):
+
+- **Empty manifest = FAIL.** An empty inventory cannot attest anything. A host without agent-visible functions declares that explicitly, e.g. one `NON_SENSITIVE` capability with `can_return_sensitive_values: false`.
+- **Contradictions resolve to the stricter result.** A `NON_SENSITIVE` surface that can return sensitive values is a FAIL, regardless of the declared mediation mode.
+
 ## SSMS example
 
 A conformant path is:

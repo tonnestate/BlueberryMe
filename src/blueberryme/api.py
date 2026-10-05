@@ -177,7 +177,7 @@ def create_app(runtime: BlueberryRuntime | None = None, auth: GatewayAuth | None
     auth = auth or GatewayAuth.from_env()
     guard = StructuredToolGuard(runtime)
     jobs = AsyncJobGateway(runtime)
-    app = FastAPI(title="BlueberryMe", version="0.4.4")
+    app = FastAPI(title="BlueberryMe", version="0.4.5")
 
     def control(authorization: str | None = Header(default=None)) -> None:
         auth.control(authorization)
@@ -199,7 +199,7 @@ def create_app(runtime: BlueberryRuntime | None = None, auth: GatewayAuth | None
     @app.get("/source")
     def source() -> dict[str, str]:
         # AGPL-3.0 section 13: network users can find the source. No data, no auth.
-        return {"name": "BlueberryMe", "version": "0.4.4", "license": "AGPL-3.0-only", "source": SOURCE_URL}
+        return {"name": "BlueberryMe", "version": "0.4.5", "license": "AGPL-3.0-only", "source": SOURCE_URL}
 
     # ---------------------------------------------------------- control plane
 

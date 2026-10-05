@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.5 — 2026-10-05
+
+Fail-closed fixes for the host capability boundary. Freeze candidate.
+
+### Host capability boundary
+
+- An empty host-capability manifest is now a hard FAIL (`host_manifest`). A host without
+  agent-visible functions must declare that explicitly, e.g. one `NON_SENSITIVE`
+  capability with `can_return_sensitive_values: false`.
+- A capability declared as `NON_SENSITIVE` surface that can still return sensitive values
+  is a contradictory declaration and now FAILs instead of passing. The stricter result
+  wins; mediation settings cannot rescue the contradiction.
+
+### Supply chain
+
+- GitHub Actions in CI are pinned to full commit SHAs instead of mutable tags.
+
+### Tests
+
+- Added regression coverage for empty manifests, explicit non-sensitive declarations and
+  contradictory `NON_SENSITIVE` declarations.
+
+
 ## 0.4.4 — 2026-10-05
 
 Lightweight boundary-consolidation release.

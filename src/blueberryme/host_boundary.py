@@ -68,11 +68,35 @@ def evaluate_host_capabilities(capabilities: Iterable[HostCapability]) -> list[H
     """
 
     checks: list[HostCapabilityCheck] = []
-    for item in capabilities:
+    items = list(capabilities)
+    if not items:
+        # An empty inventory proves nothing. A host without agent-visible functions must
+        # declare that explicitly (for example one NON_SENSITIVE capability that cannot
+        # return sensitive values) instead of passing by omission.
+        checks.append(
+            HostCapabilityCheck(
+                "host_manifest",
+                ProbeStatus.FAIL,
+                "no host capabilities declared; an empty manifest cannot attest the host boundary",
+            )
+        )
+        return checks
+
+    for item in items:
         if not item.enabled:
             checks.append(HostCapabilityCheck(item.name, ProbeStatus.SKIP, "capability disabled"))
             continue
-        if not item.can_return_sensitive_values or item.surface is HostSurface.NON_SENSITIVE:
+        if item.surface is HostSurface.NON_SENSITIVE and item.can_return_sensitive_values:
+            # Contradictory declaration: resolve towards the stricter result.
+            checks.append(
+                HostCapabilityCheck(
+                    item.name,
+                    ProbeStatus.FAIL,
+                    "contradictory declaration: NON_SENSITIVE surface that can return sensitive values",
+                )
+            )
+            continue
+        if not item.can_return_sensitive_values:
             checks.append(HostCapabilityCheck(item.name, ProbeStatus.PASS, "not a sensitive-value surface"))
             continue
         if item.mediation is HostMediation.DENY:
