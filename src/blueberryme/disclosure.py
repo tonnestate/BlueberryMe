@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from fnmatch import fnmatchcase
 from pathlib import Path
+import hashlib
 import secrets
 from typing import Any, Mapping, Sequence
 
@@ -48,6 +49,7 @@ class DatasetPurposeRule:
     agents: frozenset[str]
     lease_scopes: frozenset[str]
     max_rows: int | None
+    max_reveal_rows_per_lease: int | None
     default_action: DisclosureAction
     class_actions: Mapping[DataClass, DisclosureAction]
     field_actions: Mapping[str, DisclosureAction]
@@ -145,12 +147,28 @@ def load_dataset_policies(path: str | Path) -> DatasetPolicySet:
             if purpose_default in {DisclosureAction.REVEAL, DisclosureAction.MASKED}:
                 raise ValueError("Purpose default may not disclose raw/partial values; authorize them explicitly")
 
+            agents = frozenset(str(x) for x in value.get("agents", ["*"]))
+            sensitive_reveal = any(
+                action is DisclosureAction.REVEAL and data_class is not DataClass.PUBLIC
+                for data_class, action in class_actions.items()
+            ) or any(action is DisclosureAction.REVEAL for action in field_actions.values())
+            if sensitive_reveal and any(any(ch in agent for ch in "*?[") for agent in agents):
+                raise ValueError("Sensitive REVEAL requires concrete agent ids; wildcard agents are forbidden")
+
+            reveal_budget_raw = value.get("max_reveal_rows_per_lease")
+            reveal_budget = int(reveal_budget_raw) if reveal_budget_raw is not None else None
+            if reveal_budget is not None and reveal_budget < 1:
+                raise ValueError("max_reveal_rows_per_lease must be >= 1")
+            if sensitive_reveal and reveal_budget is None:
+                raise ValueError("Sensitive REVEAL requires max_reveal_rows_per_lease")
+
             purposes[str(purpose)] = DatasetPurposeRule(
                 operations=frozenset(str(x) for x in value.get("operations", ["*"])),
                 destinations=frozenset(str(x) for x in value.get("destinations", ["*"])),
-                agents=frozenset(str(x) for x in value.get("agents", ["*"])),
+                agents=agents,
                 lease_scopes=frozenset(str(x) for x in value.get("lease_scopes", ["*"])),
                 max_rows=(int(value["max_rows"]) if value.get("max_rows") is not None else None),
+                max_reveal_rows_per_lease=reveal_budget,
                 default_action=purpose_default,
                 class_actions=class_actions,
                 field_actions=field_actions,
@@ -194,6 +212,7 @@ class EgressGate:
     """
 
     RECEIPT_KIND = "privacy-receipt"
+    REVEAL_BUDGET_KIND = "reveal-budget"
 
     def __init__(self, runtime: Any, policies: DatasetPolicySet) -> None:
         self.runtime = runtime
@@ -251,6 +270,37 @@ class EgressGate:
 
     def get_receipt(self, receipt_id: str) -> dict[str, Any] | None:
         return self.runtime.secure_state.get_json(self.RECEIPT_KIND, receipt_id)
+
+    def _reserve_reveal_rows(
+        self,
+        *,
+        lease_id: str,
+        rule: DatasetRule,
+        purpose: str,
+        limit: int | None,
+        rows: int,
+    ) -> bool:
+        """Atomically reserve lease-scoped raw-disclosure budget.
+
+        The counter contains no business values and is owned by the lease so it is
+        deleted with the lease. A rejected reservation does not consume budget.
+        """
+        if rows <= 0 or limit is None:
+            return True
+        key_material = f"{lease_id}\0{rule.rule_id}\0{purpose}".encode("utf-8")
+        key = hashlib.sha256(key_material).hexdigest()
+        with self.runtime.secure_state.transaction():
+            current = self.runtime.secure_state.get_json(self.REVEAL_BUDGET_KIND, key) or {"used": 0}
+            used = int(current.get("used", 0))
+            if used + rows > limit:
+                return False
+            self.runtime.secure_state.put_json(
+                self.REVEAL_BUDGET_KIND,
+                key,
+                {"used": used + rows, "limit": limit},
+                owner=lease_id,
+            )
+        return True
 
     def protect_compiled_grid(
         self,
