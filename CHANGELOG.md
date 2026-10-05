@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.2 — 2026-10-05
+
+Privacy-compilation release.
+
+### Compile once
+
+- Added `PrivacyRecipeCompiler` with an escalating classification graph: exact recipe,
+  declared schema, structural inference, optional detector and agent suspicion.
+- Reusable recipes are keyed by dataset + schema fingerprint + policy version + purpose
+  + operation + destination. Hot-path dispatch is one exact encrypted-state lookup; no
+  global candidate scan.
+- Compiled fields record data class, disclosure action, provenance, evidence and
+  contradictions.
+- Added provenance states `DECLARED`, `STRUCTURAL`, `DETECTED`,
+  `AGENT_SUSPECTED`, `CROSS_CONFIRMED` and `UNKNOWN`.
+- Agent hints may tighten protection but cannot widen authority. Agent-only or contradicted
+  results stay `CANDIDATE` and are not reusable `PRIMARY` recipes.
+- Independent contradictions select the stricter policy result and prevent promotion.
+
+### Compiled egress
+
+- Added `EgressGate.protect_compiled_grid()`.
+- Compiled execution re-checks current policy version, purpose, operation, destination,
+  authenticated agent, lease scope and row limit.
+- Fields that appear after compilation are denied until the surface is recompiled.
+- Added exact invalidation for one compiled context.
+
+### Documentation
+
+- Added `docs/PRIVACY-COMPILER.md`.
+- Reworked README ordering and presentation around the current architecture and releases.
+
+### Tests
+
+- Added coverage for exact recipe reuse, cross-confirmation, agent-hint non-widening,
+  contradiction handling, compiled-grid zero-raw enforcement and context-specific dispatch.
+
+
 ## 0.4.1 — 2026-10-05
 
 Selective-disclosure and egress-evidence release.

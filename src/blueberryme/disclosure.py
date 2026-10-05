@@ -27,6 +27,20 @@ class ReceiptDecision(StrEnum):
     UNVERIFIED = "UNVERIFIED"
 
 
+_DISCLOSURE_RANK = {
+    DisclosureAction.REVEAL: 0,
+    DisclosureAction.MASKED: 1,
+    DisclosureAction.HANDLE: 2,
+    DisclosureAction.AGGREGATE: 3,
+    DisclosureAction.DENY: 4,
+}
+
+
+def _stricter_action(left: DisclosureAction, right: DisclosureAction) -> DisclosureAction:
+    """Return the action that releases less row-level information."""
+    return left if _DISCLOSURE_RANK[left] >= _DISCLOSURE_RANK[right] else right
+
+
 @dataclass(frozen=True)
 class DatasetPurposeRule:
     operations: frozenset[str]
@@ -237,6 +251,236 @@ class EgressGate:
 
     def get_receipt(self, receipt_id: str) -> dict[str, Any] | None:
         return self.runtime.secure_state.get_json(self.RECEIPT_KIND, receipt_id)
+
+    def protect_compiled_grid(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        lease_id: str,
+        *,
+        recipe: Any,
+        surface: str = "GRID",
+        path_verified: bool = True,
+    ) -> EgressResult:
+        """Enforce an already compiled privacy recipe.
+
+        The recipe is bound to policy version, dataset, purpose, operation and
+        destination. Unknown fields are denied rather than inferred on the hot path.
+        """
+        context = self.runtime.lease_context(lease_id)
+        purpose = str(context["purpose"])
+        agent_id = str(context["agent_id"])
+        scope = str(context["scope"])
+        if not path_verified:
+            receipt = self._receipt(
+                decision=ReceiptDecision.UNVERIFIED,
+                reason_code="BBM_EGRESS_PATH_UNVERIFIED",
+                path_coverage="UNVERIFIED",
+                dataset_id=str(recipe.dataset_id),
+                rule=self.policies.resolve(str(recipe.dataset_id)),
+                surface=surface,
+                purpose=purpose,
+                operation=str(recipe.operation),
+                destination=str(recipe.destination),
+                rows_observed=len(records),
+            )
+            return EgressResult((), receipt)
+
+        if purpose != str(recipe.purpose):
+            receipt = self._receipt(
+                decision=ReceiptDecision.BLOCKED,
+                reason_code="BBM_COMPILED_PURPOSE_MISMATCH",
+                path_coverage="VERIFIED",
+                dataset_id=str(recipe.dataset_id),
+                rule=self.policies.resolve(str(recipe.dataset_id)),
+                surface=surface,
+                purpose=purpose,
+                operation=str(recipe.operation),
+                destination=str(recipe.destination),
+                rows_observed=len(records),
+            )
+            return EgressResult((), receipt)
+
+        if str(recipe.policy_version) != str(self.runtime.policy.version):
+            receipt = self._receipt(
+                decision=ReceiptDecision.BLOCKED,
+                reason_code="BBM_COMPILED_POLICY_STALE",
+                path_coverage="VERIFIED",
+                dataset_id=str(recipe.dataset_id),
+                rule=self.policies.resolve(str(recipe.dataset_id)),
+                surface=surface,
+                purpose=purpose,
+                operation=str(recipe.operation),
+                destination=str(recipe.destination),
+                rows_observed=len(records),
+            )
+            return EgressResult((), receipt)
+
+        rule = self.policies.resolve(str(recipe.dataset_id))
+        if rule is None:
+            receipt = self._receipt(
+                decision=ReceiptDecision.BLOCKED,
+                reason_code="BBM_DATASET_CLASSIFICATION_REQUIRED",
+                path_coverage="VERIFIED",
+                dataset_id=str(recipe.dataset_id),
+                rule=None,
+                surface=surface,
+                purpose=purpose,
+                operation=str(recipe.operation),
+                destination=str(recipe.destination),
+                rows_observed=len(records),
+            )
+            return EgressResult((), receipt)
+        purpose_rule = rule.purposes.get(purpose)
+        if purpose_rule is None:
+            receipt = self._receipt(
+                decision=ReceiptDecision.BLOCKED,
+                reason_code="BBM_DATASET_PURPOSE_DENIED",
+                path_coverage="VERIFIED",
+                dataset_id=str(recipe.dataset_id),
+                rule=rule,
+                surface=surface,
+                purpose=purpose,
+                operation=str(recipe.operation),
+                destination=str(recipe.destination),
+                rows_observed=len(records),
+            )
+            return EgressResult((), receipt)
+
+        checks = (
+            (_matches(str(recipe.operation), purpose_rule.operations), "BBM_DATASET_OPERATION_DENIED"),
+            (_matches(str(recipe.destination), purpose_rule.destinations), "BBM_DATASET_DESTINATION_DENIED"),
+            (_matches(agent_id, purpose_rule.agents), "BBM_DATASET_AGENT_DENIED"),
+            (_matches(scope, purpose_rule.lease_scopes), "BBM_DATASET_SCOPE_DENIED"),
+        )
+        for allowed, code in checks:
+            if not allowed:
+                receipt = self._receipt(
+                    decision=ReceiptDecision.BLOCKED,
+                    reason_code=code,
+                    path_coverage="VERIFIED",
+                    dataset_id=str(recipe.dataset_id),
+                    rule=rule,
+                    surface=surface,
+                    purpose=purpose,
+                    operation=str(recipe.operation),
+                    destination=str(recipe.destination),
+                    rows_observed=len(records),
+                )
+                return EgressResult((), receipt)
+
+        if purpose_rule.max_rows is not None and len(records) > purpose_rule.max_rows:
+            receipt = self._receipt(
+                decision=ReceiptDecision.BLOCKED,
+                reason_code="BBM_DATASET_ROW_LIMIT",
+                path_coverage="VERIFIED",
+                dataset_id=str(recipe.dataset_id),
+                rule=rule,
+                surface=surface,
+                purpose=purpose,
+                operation=str(recipe.operation),
+                destination=str(recipe.destination),
+                rows_observed=len(records),
+            )
+            return EgressResult((), receipt)
+
+        recipe_fields = {item.field: item for item in recipe.fields}
+        protected = denied = aggregate = masked = raw = raw_sensitive = unknown = 0
+        classes_seen: list[DataClass] = []
+        output: list[dict[str, Any]] = []
+
+        for record in records:
+            if not isinstance(record, Mapping):
+                receipt = self._receipt(
+                    decision=ReceiptDecision.BLOCKED,
+                    reason_code="BBM_EGRESS_INVALID_STRUCTURE",
+                    path_coverage="VERIFIED",
+                    dataset_id=str(recipe.dataset_id),
+                    rule=rule,
+                    surface=surface,
+                    purpose=purpose,
+                    operation=str(recipe.operation),
+                    destination=str(recipe.destination),
+                    rows_observed=len(records),
+                )
+                return EgressResult((), receipt)
+
+            out: dict[str, Any] = {}
+            for field, value in record.items():
+                compiled = recipe_fields.get(str(field))
+                if compiled is None:
+                    unknown += 1
+                    denied += 1
+                    continue
+                data_class = compiled.data_class
+                # A compiled recipe is an optimization, never an authority source.
+                # Re-evaluate current dataset policy and enforce whichever decision is
+                # stricter. This prevents a caller from fabricating or replaying a
+                # permissive recipe object to widen disclosure.
+                current_action = purpose_rule.action_for(str(field), data_class, rule.default_action)
+                action = _stricter_action(compiled.action, current_action)
+                classes_seen.append(data_class)
+
+                if action is DisclosureAction.DENY:
+                    denied += 1
+                    continue
+                if action is DisclosureAction.AGGREGATE:
+                    aggregate += 1
+                    continue
+                if action is DisclosureAction.HANDLE:
+                    if value is None or value == "":
+                        out[field] = value
+                    else:
+                        out[field] = self.runtime.protect_value_as_handle(
+                            value,
+                            data_class,
+                            lease_id,
+                            origin_scope=f"DATASET:{recipe.dataset_id}",
+                        )
+                        protected += 1
+                    continue
+                if action is DisclosureAction.MASKED:
+                    if data_class is DataClass.SECRET:
+                        denied += 1
+                        continue
+                    out[field] = _mask(value)
+                    masked += 1
+                    continue
+                if action is DisclosureAction.REVEAL:
+                    if data_class is DataClass.SECRET:
+                        denied += 1
+                        continue
+                    out[field] = value
+                    if value is not None and value != "":
+                        raw += 1
+                        if data_class is not DataClass.PUBLIC:
+                            raw_sensitive += 1
+                    continue
+                denied += 1
+            output.append(out)
+
+        disclosed = raw > 0 or masked > 0
+        receipt = self._receipt(
+            decision=(ReceiptDecision.AUTHORIZED_DISCLOSURE if disclosed else ReceiptDecision.VERIFIED_PROTECTED),
+            reason_code=("BBM_EGRESS_AUTHORIZED_DISCLOSURE" if disclosed else "BBM_EGRESS_PROTECTED"),
+            path_coverage="VERIFIED",
+            dataset_id=str(recipe.dataset_id),
+            rule=rule,
+            surface=surface,
+            purpose=purpose,
+            operation=str(recipe.operation),
+            destination=str(recipe.destination),
+            rows_observed=len(records),
+            rows_released=len(output),
+            protected_values=protected,
+            denied_values=denied,
+            aggregate_only_values=aggregate,
+            masked_values=masked,
+            raw_values_released=raw,
+            raw_sensitive_values_released=raw_sensitive,
+            unknown_fields=unknown,
+            classes=classes_seen,
+        )
+        return EgressResult(tuple(output), receipt)
 
     def protect_grid(
         self,
