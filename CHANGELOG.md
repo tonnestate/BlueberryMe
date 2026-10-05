@@ -18,6 +18,8 @@ Lightweight boundary-consolidation release.
   `BBM_FREE_TEXT_HANDLE`, and explicit `BBM_FREE_TEXT_SCAN`.
 - Detector-based scan mode is marked as detector-bounded `AUTHORIZED_DISCLOSURE`,
   never zero-disclosure proof.
+- Free-text mediation persists payload-free Privacy Receipts; scan receipts explicitly
+  record detector-bounded coverage.
 - No new NLP/LLM subsystem was added; the scan path reuses the existing detector.
 
 ### Reliability and tests
