@@ -114,9 +114,10 @@ datasets:
       PAYROLL_SUPPORT:
         operations: ["READ_GRID", "GetGridResults"]
         destinations: ["LUNA", "AGENT:*"]
-        agents: ["*"]
+        agents: ["luna-payroll"]
         lease_scopes: ["EMPLOYEE:*"]
         max_rows: 1
+        max_reveal_rows_per_lease: 1
         default_action: DENY
         fields:
           "*salary*": REVEAL
