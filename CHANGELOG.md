@@ -7,7 +7,7 @@ Hardening release.
 ### Key custody
 
 - Persistent runtime startup now fails closed unless `BBM_MASTER_KEY_B64` or an existing
-  `BBM_MASTER_KEY_FILE` is configured.
+  `BBM_MASTER_KEY_FILE` outside the state directory is configured.
 - Automatic creation of `master.key` beside the state database is restricted to
   explicit `BBM_DEV_MODE=1`.
 
