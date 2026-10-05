@@ -108,24 +108,36 @@ def load_dataset_policies(path: str | Path) -> DatasetPolicySet:
     rules: list[DatasetRule] = []
     for item in raw.get("datasets", []) or []:
         default_action = DisclosureAction(str(item.get("default_action", "DENY")))
+        if default_action in {DisclosureAction.REVEAL, DisclosureAction.MASKED}:
+            raise ValueError("Dataset default may not disclose raw/partial values; authorize them explicitly")
         purposes: dict[str, DatasetPurposeRule] = {}
         for purpose, value in (item.get("purposes") or {}).items():
             class_actions: dict[DataClass, DisclosureAction] = {}
             for name, action in _actions(value.get("classes")).items():
                 data_class = DataClass(name)
                 parsed = DisclosureAction(action)
-                if data_class is DataClass.SECRET and parsed is DisclosureAction.REVEAL:
-                    raise ValueError("SECRET may not use REVEAL; use a capability-bound target operation")
+                if data_class is DataClass.SECRET and parsed in {DisclosureAction.REVEAL, DisclosureAction.MASKED}:
+                    raise ValueError("SECRET may not be disclosed; use a capability-bound target operation")
+                if data_class is DataClass.UNKNOWN and parsed in {DisclosureAction.REVEAL, DisclosureAction.MASKED}:
+                    raise ValueError("UNKNOWN may not be disclosed by class; use an explicit field rule after classification")
                 class_actions[data_class] = parsed
 
             field_actions = _actions(value.get("fields"))
+            for pattern, parsed in field_actions.items():
+                if pattern == "*" and parsed in {DisclosureAction.REVEAL, DisclosureAction.MASKED}:
+                    raise ValueError("Wildcard field disclosure is forbidden; enumerate a field/class explicitly")
+
+            purpose_default = DisclosureAction(str(value.get("default_action", default_action.value)))
+            if purpose_default in {DisclosureAction.REVEAL, DisclosureAction.MASKED}:
+                raise ValueError("Purpose default may not disclose raw/partial values; authorize them explicitly")
+
             purposes[str(purpose)] = DatasetPurposeRule(
                 operations=frozenset(str(x) for x in value.get("operations", ["*"])),
                 destinations=frozenset(str(x) for x in value.get("destinations", ["*"])),
                 agents=frozenset(str(x) for x in value.get("agents", ["*"])),
                 lease_scopes=frozenset(str(x) for x in value.get("lease_scopes", ["*"])),
                 max_rows=(int(value["max_rows"]) if value.get("max_rows") is not None else None),
-                default_action=DisclosureAction(str(value.get("default_action", default_action.value))),
+                default_action=purpose_default,
                 class_actions=class_actions,
                 field_actions=field_actions,
             )
