@@ -1,12 +1,18 @@
-# Privacy Compilation Layer — v0.4.2
+# Privacy Compilation Layer — v0.4.3
 
-BlueberryMe v0.4.2 turns repeated privacy inference into a compiled fast path.
+BlueberryMe v0.4.2 introduced a compiled fast path; v0.4.3 clarifies that this compiler is an optional execution capability, not a prerequisite for the BBM core path.
 
 The rule is:
 
 > **Escalate once, compile the decision, enforce deterministically thereafter.**
 
 This is inspired by the same architectural pattern used elsewhere in the TonnEstate stack: expensive discovery is not repeated indefinitely when the result can be represented as a bounded, versioned recipe.
+
+## Optional execution capability
+
+The BBM core does not depend on the Privacy Compiler. Handles, references, leases, signed intents, target adapters, jobs, execution-boundary controls and direct selective disclosure remain usable without invoking compilation.
+
+The compiler is an optimization and assurance layer for repeated structured surfaces. A deployment may disable it and continue to enforce `EgressGate.protect_grid()` directly.
 
 ## Escalation graph
 
