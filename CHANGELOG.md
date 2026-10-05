@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.1 — 2026-10-05
+
+Selective-disclosure and egress-evidence release.
+
+### Dataset-context egress
+
+- Added `EgressGate` for structured agent-visible result surfaces.
+- Added five disclosure actions: `DENY`, `AGGREGATE`, `HANDLE`, `MASKED`, `REVEAL`.
+- Dataset rules can bind purpose, operation, destination, authenticated agent identity,
+  lease scope, row count, field patterns and data classes.
+- Agent/purpose/scope authority is derived from the active lease; callers cannot widen it
+  through request fields.
+- Unknown datasets fail closed with `BBM_DATASET_CLASSIFICATION_REQUIRED`.
+- Added forced handle emission so dataset policy can be stricter than a generic class ALLOW.
+- Secrets cannot be emitted by the selective-disclosure path.
+
+### Privacy receipts
+
+- Added payload-free receipts with `VERIFIED_PROTECTED`,
+  `AUTHORIZED_DISCLOSURE`, `BLOCKED` and `UNVERIFIED`.
+- Receipts count protected, denied, aggregate-only, masked and raw-release decisions and
+  persist in encrypted BBM state without source values or handles.
+- An uncontrolled result path may never be represented as protected.
+
+### Reference policy
+
+- Added an `HR.*` example: SQL debugging defaults employee fields to handles, denies
+  IBAN/health/bank fields, keeps salary row values aggregate-only and limits bulk rows.
+- Added narrowly scoped `PAYROLL_SUPPORT` disclosure for one `EMPLOYEE:*` row.
+- `GetGridResults` is used as an integration-specific grid-reader example, not claimed
+  as a Microsoft-standard SSMS API.
+
+### Tests
+
+- Added regression coverage for zero-raw employee-grid access, explicit payroll disclosure,
+  unknown datasets, unverified paths, row limits, scope denial and payload-free receipts.
+
+
 ## 0.4.0 — 2026-10-05
 
 Major boundary and scale release.

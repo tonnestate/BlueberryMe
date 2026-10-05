@@ -10,7 +10,7 @@ BlueberryMe sits between sensitive business data and AI agents. Its design goal 
 
 > **The agent carries references, never values. Authority to resolve them is minted per call, outside the agent, and bound to one target and one operation.**
 
-BlueberryMe v0.4.0 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs in EU business environments. It is **not** a legal compliance certificate.
+BlueberryMe v0.4.1 is an experimental reference implementation of **BBM/1**. It provides technical controls that can support privacy-by-design and data-minimisation programs in EU business environments. It is **not** a legal compliance certificate.
 
 ## Why v0.3 was different
 
@@ -30,6 +30,23 @@ v0.1/v0.2 proved reversible protection, leases, policy and safe degradation. v0.
 - **Double policy check for async.** Once at submit, once at execution.
 - **Value-drift check.** A source pointer can bind `row_version`; changed source data fails the item safely.
 - **Progressive async loading.** Optional expensive providers are lazy-loaded and see only the already protected view.
+
+## What v0.4.1 adds
+
+v0.4.1 adds **purpose-bound selective disclosure at the structured-data egress boundary**.
+
+- **Dataset Context Policy.** Decisions can bind dataset, purpose, operation, destination, agent identity, lease scope, row limit, field and data class.
+- **Five disclosure actions.** `DENY`, `AGGREGATE`, `HANDLE`, `MASKED`, and explicit `REVEAL`.
+- **Four receipt states.** `VERIFIED_PROTECTED`, `AUTHORIZED_DISCLOSURE`, `BLOCKED`, and `UNVERIFIED`.
+- **Fail-closed unknown datasets.** An unregistered dataset is not silently treated as safe.
+- **Lease-derived authority.** Agent, purpose and scope come from the active BBM lease instead of untrusted request fields.
+- **Forced handles at egress.** A dataset rule can require a handle even when the generic class policy would otherwise allow a value.
+- **Payload-free Privacy Receipts.** Receipts record counts/classes/decision metadata but never row values, handles, secrets or ciphertext.
+- **HR/SSMS reference policy.** The example policy demonstrates zero-raw SQL debugging for employee tables and narrowly scoped one-row disclosure for payroll support.
+
+A grid-reader integration is conformant only if BBM runs **before** the agent receives the raw grid/resultset. If interception cannot be proven, the result is `UNVERIFIED`, not "protected".
+
+See [Selective Disclosure](docs/SELECTIVE-DISCLOSURE.md).
 
 ## What v0.4.0 adds
 
@@ -355,6 +372,7 @@ The intent is a **simple data path with a hard privacy boundary**, not maximum c
 - [`docs/BOUNDARY.md`](docs/BOUNDARY.md) — enforcement and non-bypassability
 - [`docs/EXECUTION-BOUNDARY.md`](docs/EXECUTION-BOUNDARY.md) — generated-code containment and zone conformance
 - [`docs/DATA-PLANE.md`](docs/DATA-PLANE.md) — database-scale execution and pushdown
+- [`docs/SELECTIVE-DISCLOSURE.md`](docs/SELECTIVE-DISCLOSURE.md) — dataset-context egress policy and privacy receipts
 - [`docs/ASYNC-JOBS.md`](docs/ASYNC-JOBS.md) — bounded async job model
 - [`docs/EU-BUSINESS-PROFILE.md`](docs/EU-BUSINESS-PROFILE.md) — EU business design profile
 - [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) — key threats and controls

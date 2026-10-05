@@ -2,6 +2,15 @@
 
 from .async_runtime import AsyncPrivacyPipeline, AsyncProviderRegistry
 from .dataplane import CompiledSchemaPlan, DataPlaneMode, DataPlanePlan, compile_schema, plan_data_plane, protect_compiled_batch
+from .disclosure import (
+    DatasetPolicySet,
+    DisclosureAction,
+    EgressGate,
+    EgressResult,
+    PrivacyReceipt,
+    ReceiptDecision,
+    load_dataset_policies,
+)
 from .jobs import AsyncJobGateway
 from .models import DataClass, FailureClass, Linkability, QualityAction, SourceReference, Transform
 from .proxy import StructuredToolGuard, TargetAdapter
@@ -15,9 +24,11 @@ __all__ = [
     "AsyncPrivacyPipeline", "AsyncProviderRegistry", "MemorySourceAdapter",
     "CallbackSourceAdapter", "MemoryStateBackend", "SQLiteStateBackend",
     "SourceReference", "DataClass", "Transform", "Linkability", "QualityAction",
-    "FailureClass", "CompiledSchemaPlan", "DataPlaneMode", "DataPlanePlan",
+    "FailureClass", "DatasetPolicySet", "DisclosureAction", "EgressGate", "EgressResult",
+    "PrivacyReceipt", "ReceiptDecision", "load_dataset_policies",
+    "CompiledSchemaPlan", "DataPlaneMode", "DataPlanePlan",
     "compile_schema", "plan_data_plane", "protect_compiled_batch",
     "ProbeStatus", "ZoneProbe", "ZoneProfile", "build_srt_settings",
     "zone_check", "zone_check_summary",
 ]
-__version__ = "0.4.0"
+__version__ = "0.4.1"

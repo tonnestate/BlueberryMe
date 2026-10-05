@@ -1,6 +1,6 @@
 # BBM/1 — Agent Privacy Protocol
 
-Status: **experimental draft 0.4** (reference implementation 0.4.0).
+Status: **experimental draft 0.4** (reference implementation 0.4.1).
 
 ## 1. Objective
 
@@ -285,3 +285,51 @@ For structured data, classification SHOULD be schema/registry driven and MAY be 
 For large analytical requests that do not require entity-level references, implementations SHOULD prefer source-side filtering, joins and aggregation so that only the minimal privacy-safe result crosses the Agent Boundary.
 
 BBM/1 does not define SQL generation or replace the source analytics engine. Query authorization and output protection remain mandatory regardless of where computation executes.
+
+
+## 21. Purpose-bound selective disclosure
+
+A conformant implementation MAY expose raw or derived business data to an agent only through an explicit
+egress decision. Technical readability does not imply disclosure authority.
+
+For structured result surfaces, policy SHOULD be able to bind at least:
+
+```text
+dataset × purpose × operation × destination × agent × lease scope × field/data class
+```
+
+A dataset-context egress decision MAY produce:
+
+- `DENY` — no value crosses the Agent Boundary;
+- `AGGREGATE` — row-level value remains behind the boundary;
+- `HANDLE` — opaque lease-local reference;
+- `MASKED` — explicitly authorized partial value;
+- `REVEAL` — explicitly authorized raw value.
+
+`SECRET` values MUST NOT be exposed through `MASKED` or `REVEAL`; they remain capability-bound.
+
+The authenticated lease MUST be the authority source for agent identity, purpose and scope. An untrusted
+caller MUST NOT widen disclosure by supplying those attributes in the egress request.
+
+Unknown/unclassified datasets SHOULD fail closed until classified.
+
+### 21.1 Privacy receipt
+
+Each mediated egress decision SHOULD emit payload-free evidence with one of:
+
+- `VERIFIED_PROTECTED` — BBM mediated the path and emitted no raw/masked values;
+- `AUTHORIZED_DISCLOSURE` — policy explicitly permitted raw or masked disclosure;
+- `BLOCKED` — the mediated path was denied;
+- `UNVERIFIED` — BBM could not establish that the relevant path was mediated.
+
+`UNVERIFIED` MUST NOT be represented as protected.
+
+A receipt MUST NOT contain source values, handles, secrets, ciphertext or resolved payloads.
+
+### 21.2 Grid and IDE result surfaces
+
+A grid/result reader is conformant only when result mediation occurs before raw values become agent input.
+Post-hoc masking after an agent/harness has already received plaintext does not satisfy the egress boundary.
+
+Host-specific tools may bind to this contract, but BBM/1 does not standardize a particular SSMS, IDE or
+grid-reader function name.
