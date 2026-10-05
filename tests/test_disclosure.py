@@ -165,3 +165,26 @@ def test_wrong_scope_blocks_payroll_reveal():
     )
     assert result.records == ()
     assert result.receipt.reason_code == "BBM_DATASET_SCOPE_DENIED"
+
+
+def test_wildcard_reveal_policy_is_rejected(tmp_path):
+    path = tmp_path / "unsafe.yaml"
+    path.write_text(
+        """
+version: BBM/1-draft-0.4
+datasets:
+  - id: unsafe
+    match: "HR.*"
+    default_action: DENY
+    purposes:
+      SQL_DEBUGGING:
+        default_action: DENY
+        fields:
+          "*": REVEAL
+""",
+        encoding="utf-8",
+    )
+    import pytest
+
+    with pytest.raises(ValueError):
+        load_dataset_policies(path)
