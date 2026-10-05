@@ -59,6 +59,8 @@ Free text is deliberately conservative.
 
 `BBM_FREE_TEXT_SCAN` uses the configured detector and is therefore **detector-bounded**. The result is treated as an `AUTHORIZED_DISCLOSURE`, not as proof that zero sensitive content crossed the boundary. Detector misses remain possible.
 
+The free-text helper persists a payload-free Privacy Receipt for `DENY`, `HANDLE` and `SCAN` decisions. Scan receipts deliberately mark path coverage as `DETECTOR_BOUNDED` and conservatively record that sensitive content may have crossed.
+
 The trusted host integration chooses the mode. An agent request must not be allowed to select or upgrade its own mediation mode.
 
 ## What this does not prove
