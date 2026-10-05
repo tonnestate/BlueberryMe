@@ -27,6 +27,20 @@ class ReceiptDecision(StrEnum):
     UNVERIFIED = "UNVERIFIED"
 
 
+_DISCLOSURE_RANK = {
+    DisclosureAction.REVEAL: 0,
+    DisclosureAction.MASKED: 1,
+    DisclosureAction.HANDLE: 2,
+    DisclosureAction.AGGREGATE: 3,
+    DisclosureAction.DENY: 4,
+}
+
+
+def _stricter_action(left: DisclosureAction, right: DisclosureAction) -> DisclosureAction:
+    """Return the action that releases less row-level information."""
+    return left if _DISCLOSURE_RANK[left] >= _DISCLOSURE_RANK[right] else right
+
+
 @dataclass(frozen=True)
 class DatasetPurposeRule:
     operations: frozenset[str]
@@ -398,7 +412,12 @@ class EgressGate:
                     denied += 1
                     continue
                 data_class = compiled.data_class
-                action = compiled.action
+                # A compiled recipe is an optimization, never an authority source.
+                # Re-evaluate current dataset policy and enforce whichever decision is
+                # stricter. This prevents a caller from fabricating or replaying a
+                # permissive recipe object to widen disclosure.
+                current_action = purpose_rule.action_for(str(field), data_class, rule.default_action)
+                action = _stricter_action(compiled.action, current_action)
                 classes_seen.append(data_class)
 
                 if action is DisclosureAction.DENY:
