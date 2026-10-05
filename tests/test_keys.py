@@ -25,3 +25,16 @@ def test_dev_mode_may_create_local_key(monkeypatch, tmp_path):
     assert len(first) == 32
     assert second == first
     assert (tmp_path / "master.key").read_bytes() == first
+
+
+def test_external_key_file_must_exist(monkeypatch, tmp_path):
+    monkeypatch.delenv("BBM_MASTER_KEY_B64", raising=False)
+    monkeypatch.delenv("BBM_DEV_MODE", raising=False)
+    external = tmp_path / "external.key"
+    monkeypatch.setenv("BBM_MASTER_KEY_FILE", str(external))
+
+    with pytest.raises(RuntimeError):
+        load_or_create_master_key(tmp_path / "state")
+
+    external.write_bytes(b"K" * 32)
+    assert load_or_create_master_key(tmp_path / "state") == b"K" * 32
