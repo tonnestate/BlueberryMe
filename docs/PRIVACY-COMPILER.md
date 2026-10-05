@@ -104,6 +104,8 @@ The reference runtime currently promotes only contradiction-free, independently 
 
 `EgressGate.protect_compiled_grid()` applies a compiled recipe directly to structured rows.
 
+A compiled recipe is **not an authority token**. The egress gate re-evaluates current dataset policy for every compiled field and enforces the stricter of the compiled action and the current policy action. A fabricated or stale permissive recipe therefore cannot widen disclosure.
+
 The gate still re-checks:
 
 - active lease purpose;
