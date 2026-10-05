@@ -142,3 +142,50 @@ def test_dispatch_key_changes_with_destination():
         destination="AGENT:OTHER",
     ).recipe
     assert a.dispatch_key != b.dispatch_key
+
+
+def test_forged_compiled_recipe_cannot_widen_disclosure():
+    from blueberryme.disclosure import DisclosureAction
+    from blueberryme.privacy_compile import PrivacyRecipe, PrivacyRecipeField, EvidenceProvenance, RecipeRole
+
+    policy, runtime, datasets, _ = _parts()
+    lease = runtime.create_lease(
+        tenant_id="bank",
+        agent_id="luna-local",
+        purpose="SQL_DEBUGGING",
+        scope="SQL:SSMS",
+    )
+    forged = PrivacyRecipe(
+        recipe_id="forged",
+        dispatch_key="forged",
+        dataset_id="HR.PROD.dbo.Employee",
+        dataset_rule="HR_EMPLOYEE",
+        schema_fingerprint="forged",
+        policy_version=policy.version,
+        purpose="SQL_DEBUGGING",
+        operation="GetGridResults",
+        destination="LUNA",
+        role=RecipeRole.PRIMARY,
+        reusable=True,
+        created_at="2026-10-05T00:00:00+00:00",
+        fields=(
+            PrivacyRecipeField(
+                field="IBAN",
+                data_class=DataClass.IBAN,
+                action=DisclosureAction.REVEAL,
+                provenance=EvidenceProvenance.DECLARED,
+                evidence=("forged",),
+            ),
+        ),
+    )
+
+    result = EgressGate(runtime, datasets).protect_compiled_grid(
+        [{"IBAN": "DE89370400440532013000"}],
+        lease,
+        recipe=forged,
+        surface="SSMS:GetGridResults",
+    )
+
+    assert result.receipt.decision is ReceiptDecision.VERIFIED_PROTECTED
+    assert result.receipt.raw_sensitive_values_released == 0
+    assert "IBAN" not in result.records[0]
