@@ -35,6 +35,8 @@ def load_or_create_master_key(state_dir: str | Path) -> bytes:
         path = Path(explicit)
         if not path.exists():
             raise RuntimeError("BBM_MASTER_KEY_FILE does not exist")
+        if os.environ.get("BBM_DEV_MODE") != "1" and path.resolve().is_relative_to(Path(state_dir).resolve()):
+            raise RuntimeError("BBM_MASTER_KEY_FILE must be outside the state directory")
         raw = path.read_bytes()
         if len(raw) != 32:
             raise ValueError("BlueberryMe master key file must contain exactly 32 bytes")
