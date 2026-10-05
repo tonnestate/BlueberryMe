@@ -21,6 +21,10 @@ The business source of truth is not rewritten. BlueberryMe creates a temporary p
 
 EU enterprise/legacy data is not assumed to be clean or German-only. The profile treats NULL, empty, malformed and international data as normal data-quality states rather than as a reason to expose raw values or stop an entire batch.
 
+## Key custody
+
+For persistent deployments, the reference profile expects master-key material to be configured outside the state directory. Local `master.key` generation is a development-only convenience gated by `BBM_DEV_MODE=1`.
+
 ## Organizational responsibilities remain
 
 BlueberryMe does not determine:
