@@ -282,3 +282,76 @@ def test_payroll_reveal_rejects_other_agent():
     )
     assert result.records == ()
     assert result.receipt.reason_code == "BBM_DATASET_AGENT_DENIED"
+
+
+def test_reveal_budget_survives_runtime_restart(tmp_path):
+    policy = load_policy("policies/eu-business.yaml")
+    policies = load_dataset_policies("policies/eu-business.yaml")
+    db = tmp_path / "state.db"
+    key = b"R" * 32
+
+    r1 = BlueberryRuntime(policy, state_path=db, master_key=key)
+    lease = r1.create_lease(
+        tenant_id="bank",
+        agent_id="luna-payroll",
+        purpose="PAYROLL_SUPPORT",
+        scope="EMPLOYEE:4711",
+    )
+    first = EgressGate(r1, policies).protect_grid(
+        [{"department": "Claims"}],
+        {"department": DataClass.PUBLIC},
+        lease,
+        dataset_id="HR.PROD.dbo.Employee",
+        operation="GetGridResults",
+        destination="LUNA",
+    )
+    assert first.receipt.decision is ReceiptDecision.AUTHORIZED_DISCLOSURE
+
+    r2 = BlueberryRuntime(policy, state_path=db, master_key=key)
+    second = EgressGate(r2, policies).protect_grid(
+        [{"department": "Claims"}],
+        {"department": DataClass.PUBLIC},
+        lease,
+        dataset_id="HR.PROD.dbo.Employee",
+        operation="GetGridResults",
+        destination="LUNA",
+    )
+    assert second.records == ()
+    assert second.receipt.reason_code == "BBM_REVEAL_BUDGET_EXHAUSTED"
+
+
+def test_reveal_budget_is_atomic_across_shared_sqlite_runtimes(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    policy = load_policy("policies/eu-business.yaml")
+    policies = load_dataset_policies("policies/eu-business.yaml")
+    db = tmp_path / "state.db"
+    key = b"A" * 32
+
+    creator = BlueberryRuntime(policy, state_path=db, master_key=key)
+    lease = creator.create_lease(
+        tenant_id="bank",
+        agent_id="luna-payroll",
+        purpose="PAYROLL_SUPPORT",
+        scope="EMPLOYEE:4711",
+    )
+    gates = [
+        EgressGate(BlueberryRuntime(policy, state_path=db, master_key=key), policies)
+        for _ in range(4)
+    ]
+
+    def reveal(gate):
+        return gate.protect_grid(
+            [{"department": "Claims"}],
+            {"department": DataClass.PUBLIC},
+            lease,
+            dataset_id="HR.PROD.dbo.Employee",
+            operation="GetGridResults",
+            destination="LUNA",
+        ).receipt.decision
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        decisions = list(pool.map(reveal, gates))
+
+    assert decisions.count(ReceiptDecision.AUTHORIZED_DISCLOSURE) == 1
+    assert decisions.count(ReceiptDecision.BLOCKED) == 3
