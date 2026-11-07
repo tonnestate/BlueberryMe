@@ -53,4 +53,4 @@ __all__ = [
     "ProbeStatus", "ZoneProbe", "ZoneProfile", "build_srt_settings",
     "zone_check", "zone_check_summary",
 ]
-__version__ = "0.4.4"
+__version__ = "0.4.5"
